@@ -83,7 +83,6 @@ Inventory inv;
 map<int, Recipe> recipes;
 map<int, Spell> spells;
 map<int, Tome> tomes;
-vector<int> cast_options;
 
 //////////////////////////////////////////////// DEBUG ///////////////////////////////////
 
@@ -119,12 +118,12 @@ void printData()
 		cerr << "recipe " << x.first << " weighted: " << x.second.weighted << endl;
 		cerr << "recipe " << x.first << " profit: " << x.second.profit << endl;
 	}
-	cerr << "-------------INVENTORY-------------" << endl;
-	cerr << "blue: " << inv.blue << endl;
-	cerr << "green: " << inv.green << endl;
-	cerr << "orange: " << inv.orange << endl;
-	cerr << "yellow: " << inv.yellow << endl;
-	cerr << "score: " << inv.score << endl;
+	// cerr << "-------------INVENTORY-------------" << endl;
+	// cerr << "blue: " << inv.blue << endl;
+	// cerr << "green: " << inv.green << endl;
+	// cerr << "orange: " << inv.orange << endl;
+	// cerr << "yellow: " << inv.yellow << endl;
+	// cerr << "score: " << inv.score << endl;
 }
 
 //////////////////////////////////////////////// INPUT ///////////////////////////////////
@@ -133,6 +132,7 @@ void processActions()
 {
 	int actionCount;
 	cin >> actionCount;
+	cin.ignore();
 
 	for (int i = 0; i < actionCount; i++)
 	{
@@ -149,6 +149,7 @@ void processActions()
 		bool repeatable;   // 1 if this is a repeatable player spell
 
 		cin >> actionId >> actionType >> delta0 >> delta1 >> delta2 >> delta3 >> price >> tomeIndex >> taxCount >> castable >> repeatable;
+		cin.ignore();
 
 		if (actionType == "BREW")
 			recipes.insert({actionId, Recipe(delta0, delta1, delta2, delta3, price)});
@@ -168,7 +169,10 @@ void processInventory()
 		int inv2;
 		int inv3;
 		int score;
+
 		cin >> inv0 >> inv1 >> inv2 >> inv3 >> score;
+		cin.ignore();
+
 		if (i == 0)
 			inv = Inventory(inv0, inv1, inv2, inv3, score);
 	}
@@ -261,7 +265,8 @@ bool haveRequiredStones<Tome>(Tome tome)
 	return true;
 }
 
-vector<int> getMissingStones(Stones action)
+template <typename Action>
+vector<int> getMissingStones(Action action)
 {
 	vector<int> missing(4, 0);
 
@@ -270,6 +275,15 @@ vector<int> getMissingStones(Stones action)
 	missing[2] = (action.orange < 0 && inv.orange < abs(action.orange)) ? abs(action.orange) - inv.orange : 0;
 	missing[3] = (action.yellow < 0 && inv.yellow < abs(action.yellow)) ? abs(action.yellow) - inv.yellow : 0;
 
+	return missing;
+}
+
+template <>
+vector<int> getMissingStones<Tome>(Tome tome)
+{
+	vector<int> missing(4, 0);
+
+	missing[0] = tome.tome_index;
 	return missing;
 }
 
@@ -289,16 +303,36 @@ void getRequiredStones(Stones action)
 
 void updateWeights(int id)
 {
-	if (!tomes[id].freeloader)
-		return;
 	if (tomes[id].blue > 0 && tomes[id].blue * blue_weight > 1)
+	{
 		blue_weight = 1.0 / tomes[id].blue;
+		cerr << "updated blue weight: " << blue_weight << endl;
+	}
 	if (tomes[id].green > 0 && tomes[id].green * green_weight > 1)
+	{
 		green_weight = 1.0 / tomes[id].green;
+		cerr << "updated green weight: " << green_weight << endl;
+	}
 	if (tomes[id].orange > 0 && tomes[id].orange * orange_weight > 1)
+	{
 		orange_weight = 1.0 / tomes[id].orange;
+		cerr << "updated orange weight: " << orange_weight << endl;
+	}
 	if (tomes[id].yellow > 0 && tomes[id].yellow * yellow_weight > 1)
+	{
 		yellow_weight = 1.0 / tomes[id].yellow;
+		cerr << "updated yellow weight: " << yellow_weight << endl;
+	}
+}
+
+bool hasFreeloader()
+{
+	for (auto tome : tomes)
+	{
+		if (tome.second.freeloader && tome.second.weighted >= 1)
+			return true;
+	}
+	return false;
 }
 
 int getBestFreeloader()
@@ -309,7 +343,7 @@ int getBestFreeloader()
 
 	for (auto tome : tomes)
 	{
-		if (tome.second.freeloader && tome.second.weighted >= 1.5)
+		if (tome.second.freeloader && tome.second.weighted >= 1)
 			tmp_tomes.push_back(tome.first);
 	}
 	for (auto i : tmp_tomes)
@@ -323,14 +357,30 @@ int getBestFreeloader()
 	return ret;
 }
 
-bool hasFreeloader()
+bool hasGoodSpell()
 {
 	for (auto tome : tomes)
 	{
-		if (tome.second.freeloader && tome.second.weighted >= 1.5)
+		if (tome.second.weighted >= 1)
 			return true;
 	}
 	return false;
+}
+
+int getBestSpell()
+{
+	float highest_weight = 0;
+	int ret;
+
+	for (auto tome : tomes)
+	{
+		if (tome.second.weighted > highest_weight)
+		{
+			ret = tome.first;
+			highest_weight = tome.second.weighted;
+		}
+	}
+	return ret;
 }
 
 void getSpellFromTome(int id)
@@ -344,17 +394,31 @@ void getSpellFromTome(int id)
 		getRequiredStones(tomes[id]);
 }
 
+////////////////////////////////////// CONTROL FLOW ///////////////////////////////////
+
 void computeOutput()
 {
 	if (hasFreeloader())
+	{
+		cerr << "targeting freeloader: " << getBestFreeloader() << endl;
 		getSpellFromTome(getBestFreeloader());
-	else if (haveRequiredStones(getOptimalRecipe()))
+	}
+	else if (hasGoodSpell())
+	{
+		cerr << "targeting tomespell: " << getBestSpell() << endl;
+		getSpellFromTome(getBestSpell());
+	}
+	else if (haveRequiredStones(recipes[getOptimalRecipe()]))
+	{
+		cerr << "brewing recipe: " << getOptimalRecipe() << endl;
 		cout << "BREW " << getOptimalRecipe() << endl;
+	}
 	else
+	{
+		cerr << "acquiring stones for recipe: " << getOptimalRecipe() << endl;
 		getRequiredStones(recipes[getOptimalRecipe()]);
+	}
 }
-
-////////////////////////////////////// MAIN ///////////////////////////////////
 
 int main()
 {
