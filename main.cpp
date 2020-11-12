@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 #include <map>
+#include <vector>
 
 using namespace std;
 
@@ -12,7 +13,7 @@ struct Inventory
 	int yellow;
 	int score;
 
-    Inventory() {}
+	Inventory() {}
 	Inventory(int inv0, int inv1, int inv2, int inv3, int score)
 		: blue(inv0), green(inv1), orange(inv2), yellow(inv3), score(score){};
 };
@@ -27,13 +28,11 @@ struct Recipe
 	int weighted;
 	float profit;
 
-	Recipe(int delta0, int delta1, int delta2, int delta3, int price) : rupees(price)
+	Recipe() {}
+	Recipe(int delta0, int delta1, int delta2, int delta3, int price)
+		: blue(delta0), green(delta1), orange(delta2), yellow(delta3), rupees(price)
 	{
-		blue = abs(delta0);
-		green = abs(delta1);
-		orange = abs(delta2);
-		yellow = abs(delta3);
-		weighted = 1 * blue + 2 * green + 3 * orange + 4 * yellow;
+		weighted = 1 * abs(blue) + 2 * abs(green) + 3 * abs(orange) + 4 * abs(yellow);
 		profit = (float)price / weighted;
 	}
 };
@@ -44,17 +43,18 @@ struct Spell
 	int green;
 	int orange;
 	int yellow;
-	int avail;
+	bool avail;
 
-	Spell(int delta0, int delta1, int delta2, int delta3, int avail)
+	Spell() {}
+	Spell(int delta0, int delta1, int delta2, int delta3, bool avail)
 		: blue(delta0), green(delta1), orange(delta2), yellow(delta3), avail(avail){};
 };
 
 Inventory inv;
 map<int, Recipe> recipes;
 map<int, Spell> spells;
-bool spells_set = false;
-string output;
+vector<int> brew_options;
+vector<int> cast_options;
 
 void printData()
 {
@@ -74,9 +74,8 @@ void printData()
 		cerr << x.first << ".orange: " << x.second.orange << endl;
 		cerr << x.first << ".yellow: " << x.second.yellow << endl;
 		cerr << x.first << ".rupees: " << x.second.rupees << endl;
-        cerr << x.first << ".weighted: " << x.second.weighted << endl;
-        cerr << x.first << ".profit: " << x.second.profit << endl;
-
+		cerr << x.first << ".weighted: " << x.second.weighted << endl;
+		cerr << x.first << ".profit: " << x.second.profit << endl;
 	}
 	cerr << "-------------INVENTORY-------------" << endl;
 	cerr << "blue: " << inv.blue << endl;
@@ -111,9 +110,9 @@ void processActions()
 		if (actionType == "BREW" || "CAST")
 		{
 			if (actionType == "BREW")
-				recipes.emplace(actionId, Recipe(delta0, delta1, delta2, delta3, price));
-			else if (actionType == "CAST" && !spells_set)
-				spells.emplace(actionId, Spell(delta0, delta1, delta2, delta3, castable));
+				recipes.insert({actionId, Recipe(delta0, delta1, delta2, delta3, price)});
+			else if (actionType == "CAST")
+				spells.insert({actionId, Spell(delta0, delta1, delta2, delta3, castable)});
 		}
 	}
 }
@@ -137,18 +136,121 @@ void processInventory()
 void processInput()
 {
 	recipes.clear();
+	spells.clear();
+
 	processActions();
-	if (!spells_set)
-		spells_set = true;
 	processInventory();
+}
+
+template <typename Action>
+bool haveIngredients(Action action)
+{
+	if (action.blue < 0 && inv.blue < abs(action.blue))
+		return false;
+	if (action.green < 0 && inv.green < abs(action.green))
+		return false;
+	if (action.orange < 0 && inv.orange < abs(action.orange))
+		return false;
+	if (action.yellow < 0 && inv.yellow < abs(action.yellow))
+		return false;
+	return true;
+}
+
+bool canBrew()
+{
+	brew_options.clear();
+
+	for (auto recipe : recipes)
+	{
+		// if (recipe.second.profit < 0.9)   // select better profitibility later
+		// 	continue;
+		if (!haveIngredients(recipe.second))
+			continue;
+		brew_options.push_back(recipe.first);
+	}
+	if (brew_options.empty())
+		return false;
+	return true;
+}
+
+void brewPotion()
+{
+	int output_id;
+	int max = 0;
+
+	for (auto option : brew_options)
+	{
+		if (recipes[option].profit > max)
+		{
+			max = recipes[option].profit;
+			output_id = option;
+		}
+	}
+	cout << "BREW " << output_id << endl;
+}
+
+void castSpell()
+{
+
+	for (auto option : cast_options)
+	{
+		if (spells[option].yellow > 0)
+		{
+			cout << "CAST " << option << endl;
+			return;
+		}
+	}
+	for (auto option : cast_options)
+	{
+		if (spells[option].orange > 0)
+		{
+			cout << "CAST " << option << endl;
+			return;
+		}
+	}
+	for (auto option : cast_options)
+	{
+		if (spells[option].green > 0)
+		{
+			cout << "CAST " << option << endl;
+			return;
+		}
+	}
+	for (auto option : cast_options)
+	{
+		if (spells[option].blue > 0)
+		{
+			cout << "CAST " << option << endl;
+			return;
+		}
+	}
+}
+
+bool canCast()
+{
+	cast_options.clear();
+
+	for (auto spell : spells)
+	{
+		if (!spell.second.avail)
+			continue;
+		if (!haveIngredients(spell.second))
+			continue;
+		cast_options.push_back(spell.first);
+	}
+	if (cast_options.empty())
+		return false;
+	return true;
 }
 
 void computeOutput()
 {
-	// BREW <id> | CAST <id> | LEARN <id> | REST | WAIT
-
-	output = "REST";
-	cout << output << endl;
+	if (canBrew())
+		brewPotion();
+	else if (canCast())
+		castSpell();
+	else
+		cout << "REST" << endl;
 }
 
 int main()
@@ -156,7 +258,7 @@ int main()
 	while (true)
 	{
 		processInput();
-		printData();
+		//printData();
 		computeOutput();
 	}
 }
