@@ -5,77 +5,119 @@
 
 using namespace std;
 
-struct Inventory
+//////////////////////////////////////////////// DECLARATIONS AND DATA ///////////////////////////////////
+
+float blue_weight = 0.5;
+float green_weight = 1;
+float orange_weight = 1;
+float yellow_weight = 1;
+
+struct Stones
 {
 	int blue;
 	int green;
 	int orange;
 	int yellow;
+
+	Stones() {}
+	Stones(int blue, int green, int orange, int yellow)
+		: blue(blue), green(green), orange(orange), yellow(yellow) {}
+};
+
+struct Inventory : public Stones
+{
 	int score;
 
 	Inventory() {}
 	Inventory(int inv0, int inv1, int inv2, int inv3, int score)
-		: blue(inv0), green(inv1), orange(inv2), yellow(inv3), score(score){};
+		: Stones(inv0, inv1, inv2, inv3), score(score) {}
 };
 
-struct Recipe
+struct Recipe : public Stones
 {
-	int blue;
-	int green;
-	int orange;
-	int yellow;
-	int rupees;
-	int weighted;
+	int price;
+	float weighted;
 	float profit;
 
 	Recipe() {}
 	Recipe(int delta0, int delta1, int delta2, int delta3, int price)
-		: blue(delta0), green(delta1), orange(delta2), yellow(delta3), rupees(price)
+		: Stones(delta0, delta1, delta2, delta3), price(price)
 	{
-		weighted = 1 * abs(blue) + 2 * abs(green) + 3 * abs(orange) + 4 * abs(yellow);
+		weighted = blue_weight * abs(blue) + green_weight * abs(green) + orange_weight * abs(orange) + yellow_weight * abs(yellow);
 		profit = (float)price / weighted;
 	}
 };
 
-struct Spell
+struct Spell : public Stones
 {
-	int blue;
-	int green;
-	int orange;
-	int yellow;
 	bool avail;
+	bool repeat;
+	float weighted;
 
 	Spell() {}
-	Spell(int delta0, int delta1, int delta2, int delta3, bool avail)
-		: blue(delta0), green(delta1), orange(delta2), yellow(delta3), avail(avail){};
+	Spell(int delta0, int delta1, int delta2, int delta3, bool avail, bool repeat)
+		: Stones(delta0, delta1, delta2, delta3), avail(avail), repeat(repeat)
+	{
+		weighted = (blue_weight * blue + green_weight * green + orange_weight * orange + yellow_weight * yellow);
+	}
+};
+
+struct Tome : public Stones
+{
+	int tome_index;
+	int reward;
+	float weighted;
+	bool freeloader = false;
+
+	Tome() {}
+	Tome(int delta0, int delta1, int delta2, int delta3, int tome_index, int reward)
+		: Stones(delta0, delta1, delta2, delta3), tome_index(tome_index), reward(reward)
+	{
+		weighted = (blue_weight * blue + green_weight * green + orange_weight * orange + yellow_weight * yellow);
+		if (blue >= 0 && green >= 0 && orange >= 0 && yellow >= 0)
+			freeloader = true;
+	}
 };
 
 Inventory inv;
 map<int, Recipe> recipes;
 map<int, Spell> spells;
-vector<int> brew_options;
+map<int, Tome> tomes;
 vector<int> cast_options;
+
+//////////////////////////////////////////////// DEBUG ///////////////////////////////////
 
 void printData()
 {
 	cerr << "-------------SPELLS-------------" << endl;
 	for (auto x : spells)
 	{
-		cerr << x.first << ".blue: " << x.second.blue << endl;
-		cerr << x.first << ".green: " << x.second.green << endl;
-		cerr << x.first << ".orange: " << x.second.orange << endl;
-		cerr << x.first << ".yellow: " << x.second.yellow << endl;
+		cerr << "spell " << x.first << ": [" << x.second.blue;
+		cerr << ", " << x.second.green;
+		cerr << ", " << x.second.orange;
+		cerr << ", " << x.second.yellow << "]" << endl;
+		cerr << "spell " << x.first << " weighted: " << x.second.weighted << endl;
+	}
+	cerr << "-------------TOME-------------" << endl;
+	for (auto x : tomes)
+	{
+		cerr << "tome " << x.first << ": [" << x.second.blue;
+		cerr << ", " << x.second.green;
+		cerr << ", " << x.second.orange;
+		cerr << ", " << x.second.yellow << "]" << endl;
+		cerr << "tome " << x.first << " weighted: " << x.second.weighted << endl;
+		cerr << "tome " << x.first << " freeloader: " << x.second.freeloader << endl;
 	}
 	cerr << "-------------RECIPES-------------" << endl;
 	for (auto x : recipes)
 	{
-		cerr << x.first << ".blue: " << x.second.blue << endl;
-		cerr << x.first << ".green: " << x.second.green << endl;
-		cerr << x.first << ".orange: " << x.second.orange << endl;
-		cerr << x.first << ".yellow: " << x.second.yellow << endl;
-		cerr << x.first << ".rupees: " << x.second.rupees << endl;
-		cerr << x.first << ".weighted: " << x.second.weighted << endl;
-		cerr << x.first << ".profit: " << x.second.profit << endl;
+		cerr << "recipe " << x.first << ": [" << x.second.blue;
+		cerr << ", " << x.second.green;
+		cerr << ", " << x.second.orange;
+		cerr << ", " << x.second.yellow << "]" << endl;
+		cerr << "recipe " << x.first << " price: " << x.second.price << endl;
+		cerr << "recipe " << x.first << " weighted: " << x.second.weighted << endl;
+		cerr << "recipe " << x.first << " profit: " << x.second.profit << endl;
 	}
 	cerr << "-------------INVENTORY-------------" << endl;
 	cerr << "blue: " << inv.blue << endl;
@@ -85,48 +127,47 @@ void printData()
 	cerr << "score: " << inv.score << endl;
 }
 
+//////////////////////////////////////////////// INPUT ///////////////////////////////////
+
 void processActions()
 {
-	int actionCount; // the number of spells and recipes in play
+	int actionCount;
 	cin >> actionCount;
 
 	for (int i = 0; i < actionCount; i++)
 	{
 		int actionId;	   // the unique ID of this spell or recipe
-		string actionType; // in the first league: BREW; later: CAST, OPPONENT_CAST, LEARN, BREW
+		string actionType; // CAST, OPPONENT_CAST, LEARN, BREW
 		int delta0;		   // tier-0 ingredient change
 		int delta1;		   // tier-1 ingredient change
 		int delta2;		   // tier-2 ingredient change
 		int delta3;		   // tier-3 ingredient change
 		int price;		   // the price in rupees if this is a potion
-		bool castable;	   // in the first league: always 0; later: 1 if this is a castable player spell
-
-		int tomeIndex;	 // in the first two leagues: always 0; later: the index in the tome if this is a tome spell, equal to the read-ahead tax
-		int taxCount;	 // in the first two leagues: always 0; later: the amount of taxed tier-0 ingredients you gain from learning this spell
-		bool repeatable; // for the first two leagues: always 0; later: 1 if this is a repeatable player spell
+		bool castable;	   // 1 if this is a castable player spell
+		int tomeIndex;	   // the index in the tome if this is a tome spell, equal to the read-ahead tax
+		int taxCount;	   // the amount of taxed tier-0 ingredients you gain from learning this spell
+		bool repeatable;   // 1 if this is a repeatable player spell
 
 		cin >> actionId >> actionType >> delta0 >> delta1 >> delta2 >> delta3 >> price >> tomeIndex >> taxCount >> castable >> repeatable;
 
-		if (actionType == "BREW" || "CAST")
-		{
-			if (actionType == "BREW")
-				recipes.insert({actionId, Recipe(delta0, delta1, delta2, delta3, price)});
-			else if (actionType == "CAST")
-				spells.insert({actionId, Spell(delta0, delta1, delta2, delta3, castable)});
-		}
+		if (actionType == "BREW")
+			recipes.insert({actionId, Recipe(delta0, delta1, delta2, delta3, price)});
+		else if (actionType == "CAST")
+			spells.insert({actionId, Spell(delta0, delta1, delta2, delta3, castable, repeatable)});
+		else if (actionType == "LEARN")
+			tomes.insert({actionId, Tome(delta0, delta1, delta2, delta3, tomeIndex, taxCount)});
 	}
 }
 
 void processInventory()
 {
-	// i == 0 is your own inventory
 	for (int i = 0; i < 2; i++)
 	{
-		int inv0; // tier-0 ingredients in inventory
+		int inv0;
 		int inv1;
 		int inv2;
 		int inv3;
-		int score; // amount of rupees
+		int score;
 		cin >> inv0 >> inv1 >> inv2 >> inv3 >> score;
 		if (i == 0)
 			inv = Inventory(inv0, inv1, inv2, inv3, score);
@@ -137,13 +178,69 @@ void processInput()
 {
 	recipes.clear();
 	spells.clear();
+	tomes.clear();
 
 	processActions();
 	processInventory();
 }
 
+////////////////////////////////////// RECIPES ///////////////////////////////////
+
+int getOptimalRecipe()
+{
+	float max = 0;
+	int ret;
+
+	for (auto recipe : recipes)
+	{
+		if (recipe.second.profit > max)
+		{
+			max = recipe.second.profit;
+			ret = recipe.first;
+		}
+	}
+	return ret;
+}
+
+////////////////////////////////////// SPELLS ///////////////////////////////////
+
+int getOptimalSpell(vector<int> missing)
+{
+	int ret = 0;
+	int max_gain;
+
+	for (auto spell : spells)
+	{
+		int count = 0;
+		Spell tmp = spell.second;
+
+		if (tmp.blue > 0 && missing[0] > 0)
+			count += (blue_weight * tmp.blue);
+		if (tmp.green > 0 && missing[1] > 0)
+			count += (green_weight * tmp.green);
+		if (tmp.orange > 0 && missing[2] > 0)
+			count += (orange_weight * tmp.orange);
+		if (tmp.yellow > 0 && missing[3] > 0)
+			count += (yellow_weight * tmp.yellow);
+
+		if (count >= max_gain)
+		{
+			if (count == max_gain && ret != 0)
+			{
+				if (tmp.weighted < spells[ret].weighted)
+					continue;
+			}
+			max_gain = count;
+			ret = spell.first;
+		}
+	}
+	return ret;
+}
+
+////////////////////////////////////// GENERAL FUNCTIONS ///////////////////////////////////
+
 template <typename Action>
-bool haveIngredients(Action action)
+bool haveRequiredStones(Action action)
 {
 	if (action.blue < 0 && inv.blue < abs(action.blue))
 		return false;
@@ -156,109 +253,115 @@ bool haveIngredients(Action action)
 	return true;
 }
 
-bool canBrew()
+template <>
+bool haveRequiredStones<Tome>(Tome tome)
 {
-	brew_options.clear();
-
-	for (auto recipe : recipes)
-	{
-		// if (recipe.second.profit < 0.9)   // select better profitibility later
-		// 	continue;
-		if (!haveIngredients(recipe.second))
-			continue;
-		brew_options.push_back(recipe.first);
-	}
-	if (brew_options.empty())
+	if (inv.blue < tome.tome_index)
 		return false;
 	return true;
 }
 
-void brewPotion()
+vector<int> getMissingStones(Stones action)
 {
-	int output_id;
-	int max = 0;
+	vector<int> missing(4, 0);
 
-	for (auto option : brew_options)
-	{
-		if (recipes[option].profit > max)
-		{
-			max = recipes[option].profit;
-			output_id = option;
-		}
-	}
-	cout << "BREW " << output_id << endl;
+	missing[0] = (action.blue < 0 && inv.blue < abs(action.blue)) ? abs(action.blue) - inv.blue : 0;
+	missing[1] = (action.green < 0 && inv.green < abs(action.green)) ? abs(action.green) - inv.green : 0;
+	missing[2] = (action.orange < 0 && inv.orange < abs(action.orange)) ? abs(action.orange) - inv.orange : 0;
+	missing[3] = (action.yellow < 0 && inv.yellow < abs(action.yellow)) ? abs(action.yellow) - inv.yellow : 0;
+
+	return missing;
 }
 
-void castSpell()
+void getRequiredStones(Stones action)
 {
+	int spell_id = getOptimalSpell(getMissingStones(action));
 
-	for (auto option : cast_options)
-	{
-		if (spells[option].yellow > 0)
-		{
-			cout << "CAST " << option << endl;
-			return;
-		}
-	}
-	for (auto option : cast_options)
-	{
-		if (spells[option].orange > 0)
-		{
-			cout << "CAST " << option << endl;
-			return;
-		}
-	}
-	for (auto option : cast_options)
-	{
-		if (spells[option].green > 0)
-		{
-			cout << "CAST " << option << endl;
-			return;
-		}
-	}
-	for (auto option : cast_options)
-	{
-		if (spells[option].blue > 0)
-		{
-			cout << "CAST " << option << endl;
-			return;
-		}
-	}
+	if (!spells[spell_id].avail)
+		cout << "REST" << endl;
+	else if (haveRequiredStones(spells[spell_id]))
+		cout << "CAST " << spell_id << endl;
+	else
+		getRequiredStones(spells[spell_id]);
 }
 
-bool canCast()
-{
-	cast_options.clear();
+////////////////////////////////////// TOME LOGIC ///////////////////////////////////
 
-	for (auto spell : spells)
+void updateWeights(int id)
+{
+	if (!tomes[id].freeloader)
+		return;
+	if (tomes[id].blue > 0 && tomes[id].blue * blue_weight > 1)
+		blue_weight = 1.0 / tomes[id].blue;
+	if (tomes[id].green > 0 && tomes[id].green * green_weight > 1)
+		green_weight = 1.0 / tomes[id].green;
+	if (tomes[id].orange > 0 && tomes[id].orange * orange_weight > 1)
+		orange_weight = 1.0 / tomes[id].orange;
+	if (tomes[id].yellow > 0 && tomes[id].yellow * yellow_weight > 1)
+		yellow_weight = 1.0 / tomes[id].yellow;
+}
+
+int getBestFreeloader()
+{
+	float highest_weight = 0;
+	vector<int> tmp_tomes;
+	int ret;
+
+	for (auto tome : tomes)
 	{
-		if (!spell.second.avail)
-			continue;
-		if (!haveIngredients(spell.second))
-			continue;
-		cast_options.push_back(spell.first);
+		if (tome.second.freeloader && tome.second.weighted >= 1.5)
+			tmp_tomes.push_back(tome.first);
 	}
-	if (cast_options.empty())
-		return false;
-	return true;
+	for (auto i : tmp_tomes)
+	{
+		if (tomes[i].weighted > highest_weight)
+		{
+			ret = i;
+			highest_weight = tomes[i].weighted;
+		}
+	}
+	return ret;
+}
+
+bool hasFreeloader()
+{
+	for (auto tome : tomes)
+	{
+		if (tome.second.freeloader && tome.second.weighted >= 1.5)
+			return true;
+	}
+	return false;
+}
+
+void getSpellFromTome(int id)
+{
+	if (haveRequiredStones(tomes[id]))
+	{
+		cout << "LEARN " << id << endl;
+		updateWeights(id);
+	}
+	else
+		getRequiredStones(tomes[id]);
 }
 
 void computeOutput()
 {
-	if (canBrew())
-		brewPotion();
-	else if (canCast())
-		castSpell();
+	if (hasFreeloader())
+		getSpellFromTome(getBestFreeloader());
+	else if (haveRequiredStones(getOptimalRecipe()))
+		cout << "BREW " << getOptimalRecipe() << endl;
 	else
-		cout << "REST" << endl;
+		getRequiredStones(recipes[getOptimalRecipe()]);
 }
+
+////////////////////////////////////// MAIN ///////////////////////////////////
 
 int main()
 {
 	while (true)
 	{
 		processInput();
-		//printData();
 		computeOutput();
+		printData();
 	}
 }
