@@ -3,6 +3,11 @@
 #include <map>
 #include <vector>
 
+#define MUTATOR_SPREAD 1
+#define MUTATOR_MINIMUM_GAIN 1.5
+
+// #define WITHOUT_REST 1 // define to prevent excessive resting
+
 using namespace std;
 
 //////////////////////////////////////////////// STRUCTS & GLOBALS ///////////////////////////////////
@@ -66,10 +71,28 @@ struct Action : public Stones
 	}
 };
 
-float blue_weight = 1;
-float green_weight = 2;
-float orange_weight = 3;
-float yellow_weight = 4;
+struct Weight
+{
+	float weight;
+	float factor;
+	bool blue_dep = false;
+	bool green_dep = false;
+	bool orange_dep = false;
+	bool yellow_dep = false;
+
+	Weight(float factor, bool blue_dep, bool green_dep, bool orange_dep, bool yellow_dep)
+		: factor(factor), blue_dep(blue_dep), green_dep(green_dep), orange_dep(orange_dep), yellow_dep(yellow_dep) {}
+
+	void setWeight(float weight) { this->weight = weight; }
+};
+
+Weight blue_weight(0, false, false, false, false);
+Weight green_weight(2, true, false, false, false);
+Weight orange_weight(2, false, true, false, false);
+Weight yellow_weight(2, false, false, true, false);
+
+// need declaration here for Action classes
+float getWeight(Weight &color);
 
 struct Recipe : public Action
 {
@@ -82,7 +105,7 @@ struct Recipe : public Action
 	Recipe(int delta0, int delta1, int delta2, int delta3, int price)
 		: Action(delta0, delta1, delta2, delta3), price(price)
 	{
-		weighted_cost = blue_weight * abs(blue) + green_weight * abs(green) + orange_weight * abs(orange) + yellow_weight * abs(yellow);
+		weighted_cost = getWeight(blue_weight) * abs(blue) + getWeight(green_weight) * abs(green) + getWeight(orange_weight) * abs(orange) + getWeight(yellow_weight) * abs(yellow);
 		profit = (float)price / weighted_cost;
 	}
 };
@@ -102,10 +125,10 @@ struct Spell : public Action
 	{
 		weighted_cost = 0;
 		weighted_gain = 0;
-		(blue <= 0) ? weighted_cost += blue_weight * abs(blue) : weighted_gain += blue_weight * blue;
-		(green <= 0) ? weighted_cost += green_weight * abs(green) : weighted_gain += green_weight * green;
-		(orange <= 0) ? weighted_cost += orange_weight * abs(orange) : weighted_gain += orange_weight * orange;
-		(yellow <= 0) ? weighted_cost += yellow_weight * abs(yellow) : weighted_gain += yellow_weight * yellow;
+		(blue <= 0) ? weighted_cost += getWeight(blue_weight) * abs(blue) : weighted_gain += getWeight(blue_weight) * blue;
+		(green <= 0) ? weighted_cost += getWeight(green_weight) * abs(green) : weighted_gain += getWeight(green_weight) * green;
+		(orange <= 0) ? weighted_cost += getWeight(orange_weight) * abs(orange) : weighted_gain += getWeight(orange_weight) * orange;
+		(yellow <= 0) ? weighted_cost += getWeight(yellow_weight) * abs(yellow) : weighted_gain += getWeight(yellow_weight) * yellow;
 		weighted = weighted_gain - weighted_cost;
 	}
 };
@@ -127,10 +150,10 @@ struct Tome : public Action
 	{
 		weighted_cost = 0;
 		weighted_gain = 0;
-		(blue <= 0) ? weighted_cost += blue_weight * abs(blue) : weighted_gain += blue_weight * blue;
-		(green <= 0) ? weighted_cost += green_weight * abs(green) : weighted_gain += green_weight * green;
-		(orange <= 0) ? weighted_cost += orange_weight * abs(orange) : weighted_gain += orange_weight * orange;
-		(yellow <= 0) ? weighted_cost += yellow_weight * abs(yellow) : weighted_gain += yellow_weight * yellow;
+		(blue <= 0) ? weighted_cost += getWeight(blue_weight) * abs(blue) : weighted_gain += getWeight(blue_weight) * blue;
+		(green <= 0) ? weighted_cost += getWeight(green_weight) * abs(green) : weighted_gain += getWeight(green_weight) * green;
+		(orange <= 0) ? weighted_cost += getWeight(orange_weight) * abs(orange) : weighted_gain += getWeight(orange_weight) * orange;
+		(yellow <= 0) ? weighted_cost += getWeight(yellow_weight) * abs(yellow) : weighted_gain += getWeight(yellow_weight) * yellow;
 		weighted = weighted_gain - weighted_cost;
 
 		{
@@ -176,7 +199,7 @@ struct Tome : public Action
 			if (yellow < 0)
 				cost_count++;
 
-			if (gain_count == 1 && cost_count == 1)
+			if (gain_count <= MUTATOR_SPREAD && cost_count == 1)
 				mutator = true;
 		}
 	}
@@ -219,13 +242,17 @@ map<int, Spell> spells;
 
 //////////////////////////////////////////////// DEBUG ///////////////////////////////////
 
-void printData()
+void printWeight()
 {
 	cerr << "-------------WEIGHTS-------------" << endl;
-	cerr << "blue weight: " << blue_weight << endl;
-	cerr << "green weight: " << green_weight << endl;
-	cerr << "orange weight: " << orange_weight << endl;
-	cerr << "yellow weight: " << yellow_weight << endl;
+	cerr << "blue weight: " << getWeight(blue_weight) << endl;
+	cerr << "green weight: " << getWeight(green_weight) << endl;
+	cerr << "orange weight: " << getWeight(orange_weight) << endl;
+	cerr << "yellow weight: " << getWeight(yellow_weight) << endl;
+}
+
+void printSpells()
+{
 	cerr << "-------------SPELLS-------------" << endl;
 	for (auto x : spells)
 	{
@@ -237,6 +264,10 @@ void printData()
 		cerr << "spell " << x.first << " weighted_gain: " << x.second.weighted_gain << endl;
 		cerr << "spell " << x.first << " weighted: " << x.second.weighted << endl;
 	}
+}
+
+void printTomes()
+{
 	cerr << "-------------TOME-------------" << endl;
 	for (auto x : tomes)
 	{
@@ -252,6 +283,10 @@ void printData()
 		cerr << "tome " << x.first << " mutator: " << x.second.mutator << endl;
 		cerr << "tome " << x.first << " index: " << x.second.tome_index << endl;
 	}
+}
+
+void printRecipes()
+{
 	cerr << "-------------RECIPES-------------" << endl;
 	for (auto x : recipes)
 	{
@@ -263,6 +298,10 @@ void printData()
 		cerr << "recipe " << x.first << " weighted_cost: " << x.second.weighted_cost << endl;
 		cerr << "recipe " << x.first << " profit: " << x.second.profit << endl;
 	}
+}
+
+void printInventory()
+{
 	cerr << "-------------INVENTORY-------------" << endl;
 	cerr << "blue: " << inv.blue << endl;
 	cerr << "green: " << inv.green << endl;
@@ -270,6 +309,15 @@ void printData()
 	cerr << "yellow: " << inv.yellow << endl;
 	cerr << "score: " << inv.score << endl;
 	cerr << "filled:" << inv.filled << endl;
+}
+
+void printData()
+{
+	printWeight();
+	printTomes();
+	//printRecipes();
+	//printSpells();
+	//printInventory();
 }
 
 //////////////////////////////////////////////// INPUT ///////////////////////////////////
@@ -508,19 +556,21 @@ int getOptimalSpell(vector<int> missing)
 			solving_spells.push_back(i);
 	}
 
-	cerr << "size of solving spells: " << solving_spells.size() << endl;
-
 	if (!solving_spells.empty())
 	{
 		highest_gain = 0;
 
 		for (auto i : solving_spells)
 		{
+
+#ifdef WITHOUT_REST
+
 			if (ret != -1)
 			{
 				if (spells[ret].haveRequiredStones() && !spells[i].haveRequiredStones())
 					continue;
 			}
+#endif
 			if (spells[i].weighted_gain >= highest_gain)
 			{
 				if (ret != -1)
@@ -542,11 +592,14 @@ int getOptimalSpell(vector<int> missing)
 	{
 		int gain = 0;
 
+#ifdef WITHOUT_REST
+
 		if (ret != -1)
 		{
 			if (spells[ret].haveRequiredStones() && !spells[i].haveRequiredStones())
 				continue;
 		}
+#endif
 
 		if (spells[i].blue > 0 && missing[0] > 0)
 			gain += spells[i].blue;
@@ -640,22 +693,108 @@ void getRequiredStones(T action)
 
 ////////////////////////////////////// WEIGHTS ///////////////////////////////////
 
+float getWeight(Weight &color)
+{
+	if (color.blue_dep)
+		return color.factor * getWeight(blue_weight);
+	else if (color.green_dep)
+		return color.factor * getWeight(green_weight);
+	else if (color.orange_dep)
+		return color.factor * getWeight(orange_weight);
+	else if (color.yellow_dep)
+		return color.factor * getWeight(yellow_weight);
+	else
+		return color.weight;
+}
+
+Weight createDependency(float divisor, int tome_id)
+{
+	if (tomes[tome_id].blue < 0)
+		return Weight((float)(abs(tomes[tome_id].blue)) / divisor, true, false, false, false);
+	if (tomes[tome_id].green < 0)
+		return Weight((float)(abs(tomes[tome_id].green)) / divisor, false, true, false, false);
+	if (tomes[tome_id].orange < 0)
+		return Weight((float)(abs(tomes[tome_id].orange)) / divisor, false, false, true, false);
+	else // yellow
+		return Weight((float)(abs(tomes[tome_id].yellow)) / divisor, true, false, false, true);
+}
+
 void updateWeights(int id)
 {
-	if (tomes[id].green > 0 && green_weight > 1)
+	float tmp;
+
+	if (tomes[id].blue > 0)
 	{
-		green_weight = (tomes[id].freeloader) ? 1 : tomes[id].weighted_cost / tomes[id].green;
-		cerr << "updated green weight: " << green_weight << endl;
+		if (tomes[id].freeloader)
+		{
+			tmp = 1.0 / tomes[id].blue;
+			if (tmp < getWeight(blue_weight))
+			{
+				blue_weight = Weight(0, false, false, false, false);
+				blue_weight.setWeight(tmp);
+			}
+		}
+		cerr << "updated blue weight: " << getWeight(blue_weight) << endl;
 	}
-	if (tomes[id].orange > 0 && orange_weight > 1)
+
+	if (tomes[id].green > 0)
 	{
-		orange_weight = (tomes[id].freeloader) ? 1 : tomes[id].weighted_cost / tomes[id].orange;
-		cerr << "updated orange weight: " << orange_weight << endl;
+		if (tomes[id].freeloader)
+		{
+			tmp = 1.0 / tomes[id].green;
+			if (tmp < getWeight(green_weight))
+			{
+				green_weight = Weight(0, false, false, false, false);
+				green_weight.setWeight(tmp);
+			}
+		}
+		else
+		{
+			tmp = tomes[id].weighted_cost / tomes[id].green;
+			if (tmp < getWeight(green_weight))
+				green_weight = createDependency(tomes[id].green, id);
+		}
+		cerr << "updated green weight: " << getWeight(green_weight) << endl;
 	}
-	if (tomes[id].yellow > 0 && yellow_weight > 1)
+
+	if (tomes[id].orange > 0)
 	{
-		yellow_weight = (tomes[id].freeloader) ? 1 : tomes[id].weighted_cost / tomes[id].yellow;
-		cerr << "updated yellow weight: " << yellow_weight << endl;
+		if (tomes[id].freeloader)
+		{
+			tmp = 1.0 / tomes[id].orange;
+			if (tmp < getWeight(orange_weight))
+			{
+				orange_weight = Weight(0, false, false, false, false);
+				orange_weight.setWeight(tmp);
+			}
+		}
+		else
+		{
+			tmp = tomes[id].weighted_cost / tomes[id].orange;
+			if (tmp < getWeight(orange_weight))
+				orange_weight = createDependency(tomes[id].orange, id);
+		}
+		cerr << "updated orange weight: " << getWeight(orange_weight) << endl;
+	}
+
+	if (tomes[id].yellow > 0)
+	{
+		if (tomes[id].freeloader)
+		{
+			tmp = 1.0 / tomes[id].yellow;
+			if (tmp < getWeight(yellow_weight))
+			{
+				yellow_weight = Weight(0, false, false, false, false);
+				yellow_weight.setWeight(tmp);
+			}
+		}
+		else
+		{
+			tmp = tomes[id].weighted_cost / tomes[id].yellow;
+			if (tmp < getWeight(yellow_weight))
+				yellow_weight = createDependency(tomes[id].yellow, id);
+		}
+		cerr << "updated yellow weight: " << getWeight(yellow_weight) << endl;
 	}
 }
 
@@ -665,7 +804,7 @@ bool hasFreeloader()
 {
 	for (auto tome : tomes)
 	{
-		if (tome.second.freeloader && tome.second.weighted >= 2)
+		if (tome.second.freeloader)
 			return true;
 	}
 	return false;
@@ -675,7 +814,7 @@ bool hasMutator()
 {
 	for (auto tome : tomes)
 	{
-		if (tome.second.mutator && tome.second.weighted >= 2)
+		if (tome.second.mutator && tome.second.weighted >= MUTATOR_MINIMUM_GAIN)
 			return true;
 	}
 	return false;
@@ -689,7 +828,7 @@ int getOptimalFreeloader()
 
 	for (auto tome : tomes)
 	{
-		if (tome.second.freeloader && tome.second.weighted >= 2)
+		if (tome.second.freeloader)
 			tmp_tomes.push_back(tome.first);
 	}
 	for (auto i : tmp_tomes)
@@ -716,7 +855,7 @@ int getOptimalMutator()
 
 	for (auto tome : tomes)
 	{
-		if (tome.second.mutator && tome.second.weighted >= 2)
+		if (tome.second.mutator && tome.second.weighted >= MUTATOR_MINIMUM_GAIN)
 			tmp_tomes.push_back(tome.first);
 	}
 	for (auto i : tmp_tomes)
@@ -772,7 +911,7 @@ void computeOutput()
 		int recipe_id = getOptimalProfitRecipe();
 
 		cerr << "target recipe: " << recipe_id << endl;
-		cerr << "brewing recipe " << recipe_id << " instead" << endl;
+		cerr << "brewing recipe " << recipe_id << endl;
 		cout << "BREW " << recipe_id << endl;
 	}
 
@@ -788,6 +927,8 @@ void computeOutput()
 
 int main()
 {
+	blue_weight.setWeight(0.5);
+
 	while (true)
 	{
 		processInput();
