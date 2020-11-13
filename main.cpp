@@ -5,12 +5,7 @@
 
 using namespace std;
 
-//////////////////////////////////////////////// DECLARATIONS AND DATA ///////////////////////////////////
-
-float blue_weight = 0.5;
-float green_weight = 1;
-float orange_weight = 1;
-float yellow_weight = 1;
+//////////////////////////////////////////////// STRUCTS & GLOBALS ///////////////////////////////////
 
 struct Stones
 {
@@ -33,7 +28,47 @@ struct Inventory : public Stones
 		: Stones(inv0, inv1, inv2, inv3), score(score) {}
 };
 
-struct Recipe : public Stones
+Inventory inv; /// need declaration here for Action class
+
+struct Action : public Stones
+{
+	Action() {}
+	Action(int blue, int green, int orange, int yellow)
+		: Stones(blue, green, orange, yellow) {}
+
+	virtual vector<int> getMissingStones()
+	{
+		vector<int> missing(4, 0);
+
+		cerr << "Action getMissingStones() called" << endl;
+		missing[0] = (blue < 0 && inv.blue < abs(blue)) ? abs(blue) - inv.blue : 0;
+		missing[1] = (green < 0 && inv.green < abs(green)) ? abs(green) - inv.green : 0;
+		missing[2] = (orange < 0 && inv.orange < abs(orange)) ? abs(orange) - inv.orange : 0;
+		missing[3] = (yellow < 0 && inv.yellow < abs(yellow)) ? abs(yellow) - inv.yellow : 0;
+		return missing;
+	}
+
+	virtual bool haveRequiredStones()
+	{
+		cerr << "Action haveRequiredStones() called" << endl;
+		if (blue < 0 && inv.blue < abs(blue))
+			return false;
+		if (green < 0 && inv.green < abs(green))
+			return false;
+		if (orange < 0 && inv.orange < abs(orange))
+			return false;
+		if (yellow < 0 && inv.yellow < abs(yellow))
+			return false;
+		return true;
+	}
+};
+
+float blue_weight = 1;
+float green_weight = 2;
+float orange_weight = 3;
+float yellow_weight = 4;
+
+struct Recipe : public Action
 {
 	int price;
 	float weighted;
@@ -41,28 +76,29 @@ struct Recipe : public Stones
 
 	Recipe() {}
 	Recipe(int delta0, int delta1, int delta2, int delta3, int price)
-		: Stones(delta0, delta1, delta2, delta3), price(price)
+		: Action(delta0, delta1, delta2, delta3), price(price)
 	{
 		weighted = blue_weight * abs(blue) + green_weight * abs(green) + orange_weight * abs(orange) + yellow_weight * abs(yellow);
 		profit = (float)price / weighted;
 	}
 };
 
-struct Spell : public Stones
+struct Spell : public Action
 {
 	bool avail;
 	bool repeat;
+	bool disable = false;
 	float weighted;
 
 	Spell() {}
 	Spell(int delta0, int delta1, int delta2, int delta3, bool avail, bool repeat)
-		: Stones(delta0, delta1, delta2, delta3), avail(avail), repeat(repeat)
+		: Action(delta0, delta1, delta2, delta3), avail(avail), repeat(repeat)
 	{
 		weighted = (blue_weight * blue + green_weight * green + orange_weight * orange + yellow_weight * yellow);
 	}
 };
 
-struct Tome : public Stones
+struct Tome : public Action
 {
 	int tome_index;
 	int reward;
@@ -71,15 +107,32 @@ struct Tome : public Stones
 
 	Tome() {}
 	Tome(int delta0, int delta1, int delta2, int delta3, int tome_index, int reward)
-		: Stones(delta0, delta1, delta2, delta3), tome_index(tome_index), reward(reward)
+		: Action(delta0, delta1, delta2, delta3), tome_index(tome_index), reward(reward)
 	{
 		weighted = (blue_weight * blue + green_weight * green + orange_weight * orange + yellow_weight * yellow);
 		if (blue >= 0 && green >= 0 && orange >= 0 && yellow >= 0)
 			freeloader = true;
 	}
+
+	vector<int> getMissingStones()
+	{
+		vector<int> missing(4, 0);
+
+		cerr << "Tome getMissingStones() called" << endl;
+		missing[0] = (inv.blue < tome_index) ? tome_index - inv.blue : 0;
+		
+		return missing;
+	}
+
+	bool haveRequiredStones()
+	{
+		cerr << "Tome haveRequiredStones() called" << endl;
+		if (inv.blue < tome_index)
+			return false;
+		return true;
+	}
 };
 
-Inventory inv;
 map<int, Recipe> recipes;
 map<int, Spell> spells;
 map<int, Tome> tomes;
@@ -88,10 +141,15 @@ map<int, Tome> tomes;
 
 void printData()
 {
+	cerr << "-------------WEIGHTS-------------" << endl;
+	cerr << "blue weight: " << blue_weight << endl;
+	cerr << "green weight: " << green_weight << endl;
+	cerr << "orange weight: " << orange_weight << endl;
+	cerr << "yellow weight: " << yellow_weight << endl;
 	cerr << "-------------SPELLS-------------" << endl;
 	for (auto x : spells)
 	{
-		cerr << "spell " << x.first << ": [" << x.second.blue;
+		cerr << "spell " << x.first << " stones: [" << x.second.blue;
 		cerr << ", " << x.second.green;
 		cerr << ", " << x.second.orange;
 		cerr << ", " << x.second.yellow << "]" << endl;
@@ -100,17 +158,18 @@ void printData()
 	cerr << "-------------TOME-------------" << endl;
 	for (auto x : tomes)
 	{
-		cerr << "tome " << x.first << ": [" << x.second.blue;
+		cerr << "tome " << x.first << " stones: [" << x.second.blue;
 		cerr << ", " << x.second.green;
 		cerr << ", " << x.second.orange;
 		cerr << ", " << x.second.yellow << "]" << endl;
 		cerr << "tome " << x.first << " weighted: " << x.second.weighted << endl;
 		cerr << "tome " << x.first << " freeloader: " << x.second.freeloader << endl;
+		cerr << "tome " << x.first << " index: " << x.second.tome_index << endl;
 	}
 	cerr << "-------------RECIPES-------------" << endl;
 	for (auto x : recipes)
 	{
-		cerr << "recipe " << x.first << ": [" << x.second.blue;
+		cerr << "recipe " << x.first << " stones: [" << x.second.blue;
 		cerr << ", " << x.second.green;
 		cerr << ", " << x.second.orange;
 		cerr << ", " << x.second.yellow << "]" << endl;
@@ -211,116 +270,79 @@ int getOptimalRecipe()
 int getOptimalSpell(vector<int> missing)
 {
 	int ret = 0;
-	int max_gain;
+	int max_gain = 0;
 
-	for (auto spell : spells)
+	cerr << "missing[0]: " << missing[0] << endl;
+	cerr << "missing[1]: " << missing[1] << endl;
+	cerr << "missing[2]: " << missing[2] << endl;
+	cerr << "missing[3]: " << missing[3] << endl;
+
+	for (auto &spell : spells)
 	{
 		int count = 0;
 		Spell tmp = spell.second;
 
-		if (tmp.blue > 0 && missing[0] > 0)
-			count += (blue_weight * tmp.blue);
-		if (tmp.green > 0 && missing[1] > 0)
-			count += (green_weight * tmp.green);
-		if (tmp.orange > 0 && missing[2] > 0)
-			count += (orange_weight * tmp.orange);
-		if (tmp.yellow > 0 && missing[3] > 0)
-			count += (yellow_weight * tmp.yellow);
+		if (spell.second.blue > 0 && missing[0] > 0)
+			count += spell.second.blue;
+		if (spell.second.green > 0 && missing[1] > 0)
+			count += spell.second.green;
+		if (spell.second.orange > 0 && missing[2] > 0)
+			count += spell.second.orange;
+		if (spell.second.yellow > 0 && missing[3] > 0)
+			count += spell.second.yellow;
 
-		if (count >= max_gain)
+		if (count > max_gain && !spell.second.disable)
 		{
-			if (count == max_gain && ret != 0)
-			{
-				if (tmp.weighted < spells[ret].weighted)
-					continue;
-			}
 			max_gain = count;
 			ret = spell.first;
 		}
 	}
+	spells[ret].disable = true;
 	return ret;
 }
 
 ////////////////////////////////////// GENERAL FUNCTIONS ///////////////////////////////////
 
-template <typename Action>
-bool haveRequiredStones(Action action)
+template <typename T>
+void getRequiredStones(T action)
 {
-	if (action.blue < 0 && inv.blue < abs(action.blue))
-		return false;
-	if (action.green < 0 && inv.green < abs(action.green))
-		return false;
-	if (action.orange < 0 && inv.orange < abs(action.orange))
-		return false;
-	if (action.yellow < 0 && inv.yellow < abs(action.yellow))
-		return false;
-	return true;
-}
+	int spell_id = getOptimalSpell(action.getMissingStones());
 
-template <>
-bool haveRequiredStones<Tome>(Tome tome)
-{
-	if (inv.blue < tome.tome_index)
-		return false;
-	return true;
-}
+	cerr << "optimal spell_id: " << spell_id << endl;
 
-template <typename Action>
-vector<int> getMissingStones(Action action)
-{
-	vector<int> missing(4, 0);
-
-	missing[0] = (action.blue < 0 && inv.blue < abs(action.blue)) ? abs(action.blue) - inv.blue : 0;
-	missing[1] = (action.green < 0 && inv.green < abs(action.green)) ? abs(action.green) - inv.green : 0;
-	missing[2] = (action.orange < 0 && inv.orange < abs(action.orange)) ? abs(action.orange) - inv.orange : 0;
-	missing[3] = (action.yellow < 0 && inv.yellow < abs(action.yellow)) ? abs(action.yellow) - inv.yellow : 0;
-
-	return missing;
-}
-
-template <>
-vector<int> getMissingStones<Tome>(Tome tome)
-{
-	vector<int> missing(4, 0);
-
-	missing[0] = tome.tome_index;
-	return missing;
-}
-
-void getRequiredStones(Stones action)
-{
-	int spell_id = getOptimalSpell(getMissingStones(action));
-
-	if (!spells[spell_id].avail)
+	if (!spells[spell_id].avail) // optimize this?
 		cout << "REST" << endl;
-	else if (haveRequiredStones(spells[spell_id]))
+	else if ((spells[spell_id].haveRequiredStones()))
 		cout << "CAST " << spell_id << endl;
 	else
+	{
+		cerr << "calling getRequiredStones() recursively" << endl;
 		getRequiredStones(spells[spell_id]);
+	}
 }
 
 ////////////////////////////////////// TOME LOGIC ///////////////////////////////////
 
 void updateWeights(int id)
 {
-	if (tomes[id].blue > 0 && tomes[id].blue * blue_weight > 1)
+	if (tomes[id].blue > 0)
 	{
-		blue_weight = 1.0 / tomes[id].blue;
+		blue_weight = (tomes[id].blue * blue_weight) / tomes[id].weighted;
 		cerr << "updated blue weight: " << blue_weight << endl;
 	}
-	if (tomes[id].green > 0 && tomes[id].green * green_weight > 1)
+	if (tomes[id].green > 0)
 	{
-		green_weight = 1.0 / tomes[id].green;
+		green_weight = (tomes[id].green * green_weight) / tomes[id].weighted;
 		cerr << "updated green weight: " << green_weight << endl;
 	}
-	if (tomes[id].orange > 0 && tomes[id].orange * orange_weight > 1)
+	if (tomes[id].orange > 0)
 	{
-		orange_weight = 1.0 / tomes[id].orange;
+		orange_weight = (tomes[id].orange * orange_weight) / tomes[id].weighted;
 		cerr << "updated orange weight: " << orange_weight << endl;
 	}
-	if (tomes[id].yellow > 0 && tomes[id].yellow * yellow_weight > 1)
+	if (tomes[id].yellow > 0)
 	{
-		yellow_weight = 1.0 / tomes[id].yellow;
+		yellow_weight = (tomes[id].yellow * yellow_weight) / tomes[id].weighted;
 		cerr << "updated yellow weight: " << yellow_weight << endl;
 	}
 }
@@ -361,7 +383,7 @@ bool hasGoodSpell()
 {
 	for (auto tome : tomes)
 	{
-		if (tome.second.weighted >= 1)
+		if (tome.second.weighted >= 2)
 			return true;
 	}
 	return false;
@@ -385,7 +407,7 @@ int getBestSpell()
 
 void getSpellFromTome(int id)
 {
-	if (haveRequiredStones(tomes[id]))
+	if (tomes[id].haveRequiredStones())
 	{
 		cout << "LEARN " << id << endl;
 		updateWeights(id);
@@ -408,7 +430,7 @@ void computeOutput()
 		cerr << "targeting tomespell: " << getBestSpell() << endl;
 		getSpellFromTome(getBestSpell());
 	}
-	else if (haveRequiredStones(recipes[getOptimalRecipe()]))
+	else if (recipes[getOptimalRecipe()].haveRequiredStones())
 	{
 		cerr << "brewing recipe: " << getOptimalRecipe() << endl;
 		cout << "BREW " << getOptimalRecipe() << endl;
