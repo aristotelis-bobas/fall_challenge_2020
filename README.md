@@ -16,7 +16,7 @@ My bot first looks for eligible spells in the tomebook, if it can't find any it 
 If the required resources are not available, it looks for the most efficient spell to acquire those resources. <br>
 If the required resources are not available for that spell, it recursively looks for the most efficient spell to acquire those resources.
 
-This code has gotten me to position #140 of the Bronze League. <br>
+This code has gotten me to around #100 position in the competition. <br>
 
 Key flaws of version 1: <br>
 
