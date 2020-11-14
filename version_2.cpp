@@ -225,7 +225,22 @@ public:
 	Recipe recipe;
 
 	GreedySim(Inventory inv, map<int, Spell> spells, Recipe recipe)
-		: Simulation(recipe.getMissingStones(inv), inv, spells), recipe(recipe) {}
+		: Simulation(recipe.getMissingStones(inv), inv, spells), recipe(recipe)
+	{
+		// cerr << "simulation missing [";
+		// for (int i = 0; i < 4; i++)
+		// {
+		// 	cerr << stones[i];
+		// 	(i == 3) ? cerr << "]" << endl : cerr << ", ";
+		// }
+
+		// cerr << "recipe [";
+		// for (int i = 0; i < 4; i++)
+		// {
+		// 	cerr << recipe.stones[i];
+		// 	(i == 3) ? cerr << "]" << endl : cerr << ", ";
+		// }
+	}
 
 	void updateMissing()
 	{
@@ -237,9 +252,8 @@ public:
 		// for (int i = 0; i < 4; i++)
 		// {
 		// 	cerr << stones[i];
-		// 	(i == 3) ? cerr << "]" : cerr << ", ";
+		// 	(i == 3) ? cerr << "]" << endl : cerr << ", ";
 		// }
-		// cerr << endl;
 	}
 
 	void updateInv(int spell_id)
@@ -326,11 +340,11 @@ public:
 	{
 		int spell_id = getSimulationSpell(action.getMissingStones(inv));
 
-		//cerr << "at recursion level " << Recursion::getLevel() << " spell is " << spell_id << endl;
+		// cerr << "at recursion level " << Recursion::getLevel() << " spell is " << spell_id << endl;
 
 		if (!spells[spell_id].avail)
 		{
-			//cerr << "simulation rests at step " << log.size() << endl;
+			// cerr << "simulation rests at step " << log.size() << endl;
 			restoreSpellAvailability(spells);
 			log.push_back(-1);
 			return;
@@ -338,7 +352,7 @@ public:
 
 		if (spells[spell_id].haveRequiredStones(inv))
 		{
-			//cerr << "simulation casts spell " << spell_id << " at step " << log.size() << endl;
+			// cerr << "simulation casts spell " << spell_id << " at step " << log.size() << endl;
 			log.push_back(spell_id);
 			spells[spell_id].avail = false;
 			updateInv(spell_id);
@@ -347,8 +361,8 @@ public:
 		}
 
 		spells[spell_id].disable_recursion = true;
-		//Recursion::incLevel();
-		//cerr << "entering recursion level " << Recursion::getLevel() << endl;
+		// Recursion::incLevel();
+		// cerr << "entering recursion level " << Recursion::getLevel() << endl;
 		simulateAcquiringStones(spells[spell_id]);
 		return;
 	}
@@ -357,7 +371,7 @@ public:
 	{
 		while (stonesMissing())
 		{
-			//Recursion::setLevel(0);
+			// Recursion::setLevel(0);
 			restoreSpellRecursion(spells);
 			simulateAcquiringStones(recipe);
 		}
@@ -371,133 +385,6 @@ map<int, Tome> g_tomes;
 map<int, Spell> g_spells;
 Inventory g_inv;
 
-//////////////////////////////////////////////// DEBUG ///////////////////////////////////
-
-void printSpells()
-{
-	cerr << "-------------SPELLS-------------" << endl;
-	for (auto spell : g_spells)
-	{
-		cerr << "spell " << spell.first << " [";
-		for (int i = 0; i < 4; i++)
-		{
-			cerr << spell.second.stones[i];
-			(i == 3) ? cerr << "]" << endl : cerr << ", ";
-		}
-	}
-}
-
-void printTomes()
-{
-	cerr << "-------------TOMES-------------" << endl;
-	for (auto tome : g_tomes)
-	{
-		cerr << "tome " << tome.first << " [";
-		for (int i = 0; i < 4; i++)
-		{
-			cerr << tome.second.stones[i];
-			(i == 3) ? cerr << "]" : cerr << ", ";
-		}
-		cerr << " for " << tome.second.tax_cost << " blue stones" << endl;
-	}
-}
-
-void printRecipes()
-{
-	cerr << "-------------RECIPES-------------" << endl;
-	for (auto recipe : g_recipes)
-	{
-		cerr << "recipe " << recipe.first << " [";
-		for (int i = 0; i < 4; i++)
-		{
-			cerr << recipe.second.stones[i];
-			(i == 3) ? cerr << "]" : cerr << ", ";
-		}
-		cerr << " for " << recipe.second.price << " rupees" << endl;
-	}
-}
-
-void printInventory()
-{
-	cerr << "-------------INVENTORY-------------" << endl;
-	cerr << "inventory [";
-	for (int i = 0; i < 4; i++)
-	{
-		cerr << g_inv.stones[i];
-		(i == 3) ? cerr << "]" : cerr << ", ";
-	}
-	cerr << " filled for [" << g_inv.slots_filled << "/10]" << endl;
-}
-
-void printData()
-{
-	printTomes();
-	printRecipes();
-	printSpells();
-	printInventory();
-}
-
-//////////////////////////////////////////////// INPUT ///////////////////////////////////
-
-void processActions()
-{
-	int action_count;
-	cin >> action_count;
-	cin.ignore();
-
-	for (int i = 0; i < action_count; i++)
-	{
-		int id;			 // the unique ID of this spell or recipe
-		string type;	 // CAST, OPPONENT_CAST, LEARN, BREW
-		int blue;		 // tier-0 ingredient change
-		int green;		 // tier-1 ingredient change
-		int orange;		 // tier-2 ingredient change
-		int yellow;		 // tier-3 ingredient change
-		int price;		 // the price in rupees if this is a potion
-		bool castable;	 // 1 if this is a castable player spell
-		int tome_index;	 // the index in the tome if this is a tome spell, equal to the read-ahead tax
-		int tax_count;	 // the amount of taxed tier-0 ingredients you gain from learning this spell
-		bool repeatable; // 1 if this is a repeatable player spell
-
-		cin >> id >> type >> blue >> green >> orange >> yellow >> price >> tome_index >> tax_count >> castable >> repeatable;
-		cin.ignore();
-
-		if (type == "BREW")
-			g_recipes.insert({id, Recipe(blue, green, orange, yellow, price)});
-		else if (type == "CAST")
-			g_spells.insert({id, Spell(blue, green, orange, yellow, castable, repeatable)});
-		else if (type == "LEARN")
-			g_tomes.insert({id, Tome(blue, green, orange, yellow, tome_index, tax_count)});
-	}
-}
-
-void processInventory()
-{
-	for (int i = 0; i < 2; i++)
-	{
-		int blue;
-		int green;
-		int orange;
-		int yellow;
-		int score;
-
-		cin >> blue >> green >> orange >> yellow >> score;
-		cin.ignore();
-
-		if (i == 0)
-			g_inv = Inventory(blue, green, orange, yellow, score);
-	}
-}
-
-void processInput()
-{
-	g_recipes.clear();
-	g_spells.clear();
-	g_tomes.clear();
-
-	processActions();
-	processInventory();
-}
 
 ////////////////////////////////////// RESOURCE MECHANICS //////////////////////////////////////
 
@@ -567,7 +454,254 @@ void getRequiredStones(T action)
 	return;
 }
 
+////////////////////////////////////// RESOURCE VALUATION ///////////////////////////////////
+
+int simulateStoneSteps(int blue, int green, int orange, int yellow, map<int, Spell> input_spells)
+{
+	Inventory sim_inv(0, 0, 0, 0, 0);
+	Recipe sim_recipe(blue, green, orange, yellow, 0);
+	map<int, Spell> sim_spells = input_spells;
+	restoreSpellAvailability(sim_spells);
+
+	GreedySim greedy_sim(sim_inv, sim_spells, sim_recipe);
+	return greedy_sim.simulate();
+}
+
+float getCreationEfficiency(int tier, map<int, Spell> sim_spells = g_spells)
+{
+	if (tier == 0)
+		return 1.0 / simulateStoneSteps(-2, 0, 0, 0, sim_spells);
+	else if (tier == 1)
+		return 1.0 / simulateStoneSteps(0, -2, 0, 0, sim_spells);
+	else if (tier == 2)
+		return 1.0 / simulateStoneSteps(0, 0, -2, 0, sim_spells);
+	else
+		return 1.0 / simulateStoneSteps(0, 0, 0, -2, sim_spells);
+}
+
 ////////////////////////////////////// TOME MECHANICS ///////////////////////////////////
+
+void getSpellFromTome(int id)
+{
+	if (g_tomes[id].haveRequiredStones(g_inv))
+		cout << "LEARN " << id << endl;
+	else
+	{
+		cerr << "not enough stones to learn tome " << id << endl;
+		getRequiredStones(g_tomes[id]);
+	}
+}
+
+////////////////////////////////////// RECIPE ALGORITHM //////////////////////////////////////
+
+int simulateRecipeSteps(int id)
+{
+	int greedy_steps = 0;
+	GreedySim greedy_sim(g_inv, g_spells, g_recipes[id]);
+
+	greedy_steps = greedy_sim.simulate();
+	cerr << "[GreedySim] recipe " << id << " -- " << greedy_steps << " steps -- " << g_recipes[id].price / (float)greedy_steps << " efficiency " << endl;
+	return greedy_steps;
+}
+
+int getOptimalRecipe()
+{
+	float max = 0;
+	int ret;
+	int id;
+	int computed;
+
+	for (auto &recipe : g_recipes)
+	{
+		id = recipe.first;
+		computed = simulateRecipeSteps(id);
+
+		if ((g_recipes[id].price / (float)computed) > max)
+		{
+			max = g_recipes[id].price / (float)computed;
+			ret = id;
+		}
+	}
+	return ret;
+}
+
+////////////////////////////////////// CONTROL FLOW ///////////////////////////////////
+
+void computeOutput()
+{
+	if (false)
+	{
+		// TOME SHIT
+		return;
+	}
+
+	else
+	{
+		int recipe_id = getOptimalRecipe();
+		cerr << "focusing on brewing recipe " << recipe_id << endl;
+
+		if (g_recipes[recipe_id].haveRequiredStones(g_inv))
+			cout << "BREW " << recipe_id << endl;
+		else
+		{
+			cerr << "not enough stones to brew recipe " << recipe_id << endl;
+			getRequiredStones(g_recipes[recipe_id]);
+		}
+	}
+}
+
+
+//////////////////////////////////////////////// DEBUG ///////////////////////////////////
+
+void printStones()
+{
+	cerr << "-------------STONE CREATION-------------" << endl;
+	cerr << "creation efficiency [";
+	for (int i = 0; i < 4; i++)
+	{
+		cerr << getCreationEfficiency(i);
+		(i == 3) ? cerr << "]" << endl : cerr << ", ";
+	}
+}
+
+void printSpells()
+{
+	cerr << "-------------SPELLS-------------" << endl;
+	for (auto spell : g_spells)
+	{
+		cerr << "spell " << spell.first << " [";
+		for (int i = 0; i < 4; i++)
+		{
+			cerr << spell.second.stones[i];
+			(i == 3) ? cerr << "]" << endl : cerr << ", ";
+		}
+	}
+}
+
+void printTomes()
+{
+	cerr << "-------------TOMES-------------" << endl;
+	for (auto tome : g_tomes)
+	{
+		cerr << "tome " << tome.first << " [";
+		for (int i = 0; i < 4; i++)
+		{
+			cerr << tome.second.stones[i];
+			(i == 3) ? cerr << "]" : cerr << ", ";
+		}
+		cerr << " for " << tome.second.tax_cost << " blue stones" << endl;
+	}
+}
+
+void printRecipes()
+{
+	cerr << "-------------RECIPES-------------" << endl;
+	for (auto recipe : g_recipes)
+	{
+		cerr << "recipe " << recipe.first << " [";
+		for (int i = 0; i < 4; i++)
+		{
+			cerr << recipe.second.stones[i];
+			(i == 3) ? cerr << "]" : cerr << ", ";
+		}
+		cerr << " for " << recipe.second.price << " rupees" << endl;
+	}
+}
+
+void printInventory()
+{
+	cerr << "-------------INVENTORY-------------" << endl;
+	cerr << "inventory [";
+	for (int i = 0; i < 4; i++)
+	{
+		cerr << g_inv.stones[i];
+		(i == 3) ? cerr << "]" : cerr << ", ";
+	}
+	cerr << " filled for [" << g_inv.slots_filled << "/10]" << endl;
+}
+
+void printData()
+{
+	printStones();
+	// printTomes();
+	// printRecipes();
+	// printSpells();
+	// printInventory();
+}
+
+//////////////////////////////////////////////// GAME STATE ///////////////////////////////////
+
+void processActions()
+{
+	int action_count;
+	cin >> action_count;
+	cin.ignore();
+
+	for (int i = 0; i < action_count; i++)
+	{
+		int id;			 // the unique ID of this spell or recipe
+		string type;	 // CAST, OPPONENT_CAST, LEARN, BREW
+		int blue;		 // tier-0 ingredient change
+		int green;		 // tier-1 ingredient change
+		int orange;		 // tier-2 ingredient change
+		int yellow;		 // tier-3 ingredient change
+		int price;		 // the price in rupees if this is a potion
+		bool castable;	 // 1 if this is a castable player spell
+		int tome_index;	 // the index in the tome if this is a tome spell, equal to the read-ahead tax
+		int tax_count;	 // the amount of taxed tier-0 ingredients you gain from learning this spell
+		bool repeatable; // 1 if this is a repeatable player spell
+
+		cin >> id >> type >> blue >> green >> orange >> yellow >> price >> tome_index >> tax_count >> castable >> repeatable;
+		cin.ignore();
+
+		if (type == "BREW")
+			g_recipes.insert({id, Recipe(blue, green, orange, yellow, price)});
+		else if (type == "CAST")
+			g_spells.insert({id, Spell(blue, green, orange, yellow, castable, repeatable)});
+		else if (type == "LEARN")
+			g_tomes.insert({id, Tome(blue, green, orange, yellow, tome_index, tax_count)});
+	}
+}
+
+void processInventory()
+{
+	for (int i = 0; i < 2; i++)
+	{
+		int blue;
+		int green;
+		int orange;
+		int yellow;
+		int score;
+
+		cin >> blue >> green >> orange >> yellow >> score;
+		cin.ignore();
+
+		if (i == 0)
+			g_inv = Inventory(blue, green, orange, yellow, score);
+	}
+}
+
+void processInput()
+{
+	g_recipes.clear();
+	g_spells.clear();
+	g_tomes.clear();
+
+	processActions();
+	processInventory();
+}
+
+int main()
+{
+	while (true)
+	{
+		processInput();
+		computeOutput();
+		printData();
+	}
+}
+
+////////////////////////////////////////////////////////==========OLD=================////////////////////////////////////////////////////////////////////////////////////////////
 
 bool hasFreeloader()
 {
@@ -641,86 +775,4 @@ int getOptimalTome()
 		return getOptimalMutator();
 	else
 		return -1;
-}
-
-void getSpellFromTome(int id)
-{
-	if (g_tomes[id].haveRequiredStones(g_inv))
-		cout << "LEARN " << id << endl;
-	else
-	{
-		cerr << "not enough stones to learn tome " << id << endl;
-		getRequiredStones(g_tomes[id]);
-	}
-}
-
-////////////////////////////////////// RECIPE ALGORITHM //////////////////////////////////////
-
-int computeSteps(int id)
-{
-	int greedy_steps = 0;
-	GreedySim greedy_sim(g_inv, g_spells, g_recipes[id]);
-
-	greedy_steps = greedy_sim.simulate();
-	cerr << "recipe " << id << " with efficiency " << g_recipes[id].price / (float)greedy_steps << " takes " << greedy_steps << " steps to complete" << endl;
-	return greedy_steps;
-}
-
-int getOptimalRecipe()
-{
-	float max = 0;
-	int ret;
-	int id;
-	int computed;
-
-	for (auto &recipe : g_recipes)
-	{
-		id = recipe.first;
-		computed = computeSteps(id);
-
-		if ((g_recipes[id].price / (float)computed) > max)
-		{
-			max = g_recipes[id].price / (float)computed;
-			ret = id;
-		}
-	}
-	return ret;
-}
-
-////////////////////////////////////// CONTROL FLOW ///////////////////////////////////
-
-void computeOutput()
-{
-
-	if (g_inv.score < 25 && (hasFreeloader() || hasMutator()))
-	{
-		int tome_id = getOptimalTome();
-		cerr << "focusing on learning tome " << tome_id << endl;
-
-		getSpellFromTome(tome_id);
-	}
-	
-	else
-	{
-		int recipe_id = getOptimalRecipe();
-		cerr << "focusing on brewing recipe " << recipe_id << endl;
-
-		if (g_recipes[recipe_id].haveRequiredStones(g_inv))
-			cout << "BREW " << recipe_id << endl;
-		else
-		{
-			cerr << "not enough stones to brew recipe " << recipe_id << endl;
-			getRequiredStones(g_recipes[recipe_id]);
-		}
-	}
-}
-
-int main()
-{
-	while (true)
-	{
-		processInput();
-		computeOutput();
-		//printData();
-	}
 }
