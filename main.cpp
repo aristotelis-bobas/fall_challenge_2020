@@ -3,10 +3,8 @@
 #include <map>
 #include <vector>
 
-#define MUTATOR_SPREAD 1
-#define MUTATOR_MINIMUM_GAIN 1.5
-
-// #define WITHOUT_REST 1 // define to prevent excessive resting
+#define TOME_MAX_DISTRO 2
+#define TOME_MAX_DEPTH 4
 
 using namespace std;
 
@@ -97,8 +95,9 @@ float getWeight(Weight &color);
 struct Recipe : public Action
 {
 	int price;
+	int distribution;
 	float weighted_cost;
-	float profit;
+	float efficiency;
 	bool recursion_disabled = false;
 
 	Recipe() {}
@@ -106,7 +105,21 @@ struct Recipe : public Action
 		: Action(delta0, delta1, delta2, delta3), price(price)
 	{
 		weighted_cost = getWeight(blue_weight) * abs(blue) + getWeight(green_weight) * abs(green) + getWeight(orange_weight) * abs(orange) + getWeight(yellow_weight) * abs(yellow);
-		profit = (float)price / weighted_cost;
+
+		{
+			distribution = 0;
+
+			if (blue < 0)
+				distribution++;
+			if (green < 0)
+				distribution++;
+			if (orange < 0)
+				distribution++;
+			if (yellow < 0)
+				distribution++;
+		}
+
+		efficiency = ((3 * (float)price / weighted_cost) + distribution) / 4.0;
 	}
 };
 
@@ -176,30 +189,31 @@ struct Tome : public Action
 		}
 
 		{
-			int gain_count = 0;
 			int cost_count = 0;
+			int cost_depth = 0;
 
-			if (blue > 0)
-				gain_count++;
 			if (blue < 0)
+			{
 				cost_count++;
-
-			if (green > 0)
-				gain_count++;
+				cost_depth = abs(blue);
+			}
 			if (green < 0)
+			{
 				cost_count++;
-
-			if (orange > 0)
-				gain_count++;
+				cost_depth = abs(green);
+			}
 			if (orange < 0)
+			{
 				cost_count++;
-
-			if (yellow > 0)
-				gain_count++;
+				cost_depth = abs(orange);
+			}
 			if (yellow < 0)
+			{
 				cost_count++;
+				cost_depth = abs(yellow);
+			}
 
-			if (gain_count <= MUTATOR_SPREAD && cost_count == 1)
+			if (distribution <= TOME_MAX_DISTRO && cost_count == 1 && cost_depth <= TOME_MAX_DEPTH)
 				mutator = true;
 		}
 	}
@@ -218,22 +232,6 @@ struct Tome : public Action
 			return false;
 		return true;
 	}
-
-	int getDistribution()
-	{
-		int distribution = 0;
-
-		if (blue > 0)
-			distribution++;
-		if (green > 0)
-			distribution++;
-		if (orange > 0)
-			distribution++;
-		if (yellow > 0)
-			distribution++;
-
-		return distribution;
-	}
 };
 
 map<int, Recipe> recipes;
@@ -245,10 +243,8 @@ map<int, Spell> spells;
 void printWeight()
 {
 	cerr << "-------------WEIGHTS-------------" << endl;
-	cerr << "blue weight: " << getWeight(blue_weight) << endl;
-	cerr << "green weight: " << getWeight(green_weight) << endl;
-	cerr << "orange weight: " << getWeight(orange_weight) << endl;
-	cerr << "yellow weight: " << getWeight(yellow_weight) << endl;
+	cerr << "stone value distribution currently [" << getWeight(blue_weight) << ", ";
+	cerr << getWeight(green_weight) << ", " << getWeight(orange_weight) << ", " << getWeight(yellow_weight) << "]" << endl;
 }
 
 void printSpells()
@@ -256,32 +252,34 @@ void printSpells()
 	cerr << "-------------SPELLS-------------" << endl;
 	for (auto x : spells)
 	{
-		cerr << "spell " << x.first << " stones: [" << x.second.blue;
+		cerr << "spell " << x.first << " rated [" << x.second.weighted << "] for stones [" << x.second.blue;
 		cerr << ", " << x.second.green;
 		cerr << ", " << x.second.orange;
 		cerr << ", " << x.second.yellow << "]" << endl;
-		cerr << "spell " << x.first << " weighted_cost: " << x.second.weighted_cost << endl;
-		cerr << "spell " << x.first << " weighted_gain: " << x.second.weighted_gain << endl;
-		cerr << "spell " << x.first << " weighted: " << x.second.weighted << endl;
+
+		// cerr << "spell " << x.first << " weighted_cost: " << x.second.weighted_cost << endl;
+		// cerr << "spell " << x.first << " weighted_gain: " << x.second.weighted_gain << endl;
+		//cerr << "spell " << x.first << " weighted: " << x.second.weighted << endl;
 	}
 }
 
 void printTomes()
 {
-	cerr << "-------------TOME-------------" << endl;
+	cerr << "-------------TOMES-------------" << endl;
 	for (auto x : tomes)
 	{
-		cerr << "tome " << x.first << " stones: [" << x.second.blue;
+		cerr << "tome " << x.first << " rated [" << x.second.weighted << "] for stones [" << x.second.blue;
 		cerr << ", " << x.second.green;
 		cerr << ", " << x.second.orange;
-		cerr << ", " << x.second.yellow << "]" << endl;
-		cerr << "tome " << x.first << " weighted_cost: " << x.second.weighted_cost << endl;
-		cerr << "tome " << x.first << " weighted_gain: " << x.second.weighted_gain << endl;
-		cerr << "tome " << x.first << " weighted: " << x.second.weighted << endl;
-		cerr << "tome " << x.first << " distribution: " << x.second.distribution << endl;
-		cerr << "tome " << x.first << " freeloader: " << x.second.freeloader << endl;
-		cerr << "tome " << x.first << " mutator: " << x.second.mutator << endl;
-		cerr << "tome " << x.first << " index: " << x.second.tome_index << endl;
+		cerr << ", " << x.second.yellow << "] with price " << x.second.tome_index << endl;
+
+		// cerr << "tome " << x.first << " weighted_cost: " << x.second.weighted_cost << endl;
+		// cerr << "tome " << x.first << " weighted_gain: " << x.second.weighted_gain << endl;
+		//cerr << "tome " << x.first << " weighted: " << x.second.weighted << endl;
+		// cerr << "tome " << x.first << " distribution: " << x.second.distribution << endl;
+		// cerr << "tome " << x.first << " freeloader: " << x.second.freeloader << endl;
+		// cerr << "tome " << x.first << " mutator: " << x.second.mutator << endl;
+		// cerr << "tome " << x.first << " index: " << x.second.tome_index << endl;
 	}
 }
 
@@ -290,13 +288,15 @@ void printRecipes()
 	cerr << "-------------RECIPES-------------" << endl;
 	for (auto x : recipes)
 	{
-		cerr << "recipe " << x.first << " stones: [" << x.second.blue;
+		cerr << "recipe " << x.first << " rated [" << x.second.efficiency << "] for stones [" << x.second.blue;
 		cerr << ", " << x.second.green;
 		cerr << ", " << x.second.orange;
-		cerr << ", " << x.second.yellow << "]" << endl;
-		cerr << "recipe " << x.first << " price: " << x.second.price << endl;
-		cerr << "recipe " << x.first << " weighted_cost: " << x.second.weighted_cost << endl;
-		cerr << "recipe " << x.first << " profit: " << x.second.profit << endl;
+		cerr << ", " << x.second.yellow << "] with price " << x.second.price << endl;
+
+		// cerr << "recipe " << x.first << " price: " << x.second.price << endl;
+		// cerr << "recipe " << x.first << " weighted_cost: " << x.second.weighted_cost << endl;
+		// cerr << "recipe " << x.first << " distribution: " << x.second.distribution << endl;
+		//cerr << "recipe " << x.first << " efficiency: " << x.second.efficiency << endl;
 	}
 }
 
@@ -315,7 +315,7 @@ void printData()
 {
 	printWeight();
 	printTomes();
-	//printRecipes();
+	printRecipes();
 	//printSpells();
 	//printInventory();
 }
@@ -400,16 +400,16 @@ int getHighestPriceReceipe()
 	return ret;
 }
 
-int getOptimalProfitRecipe()
+int getMostEfficientRecipe()
 {
 	float max = 0;
 	int ret;
 
 	for (auto &recipe : recipes)
 	{
-		if (recipe.second.profit > max)
+		if (recipe.second.efficiency > max)
 		{
-			max = recipe.second.profit;
+			max = recipe.second.efficiency;
 			ret = recipe.first;
 		}
 	}
@@ -562,15 +562,6 @@ int getOptimalSpell(vector<int> missing)
 
 		for (auto i : solving_spells)
 		{
-
-#ifdef WITHOUT_REST
-
-			if (ret != -1)
-			{
-				if (spells[ret].haveRequiredStones() && !spells[i].haveRequiredStones())
-					continue;
-			}
-#endif
 			if (spells[i].weighted_gain >= highest_gain)
 			{
 				if (ret != -1)
@@ -591,15 +582,6 @@ int getOptimalSpell(vector<int> missing)
 	for (auto i : eligible_spells)
 	{
 		int gain = 0;
-
-#ifdef WITHOUT_REST
-
-		if (ret != -1)
-		{
-			if (spells[ret].haveRequiredStones() && !spells[i].haveRequiredStones())
-				continue;
-		}
-#endif
 
 		if (spells[i].blue > 0 && missing[0] > 0)
 			gain += spells[i].blue;
@@ -668,7 +650,7 @@ void getRequiredStones(T action)
 		}
 	}
 
-	cerr << "optimal spell_id: " << spell_id << endl;
+	cerr << "focusing on casting spell " << spell_id << endl;
 
 	if (!spells[spell_id].avail)
 	{
@@ -678,14 +660,13 @@ void getRequiredStones(T action)
 
 	if ((spells[spell_id].haveRequiredStones()))
 	{
-		cerr << "casting spell: " << spell_id << endl;
 		cout << "CAST " << spell_id << endl;
 		return;
 	}
 
 	else
 	{
-		cerr << "calling getRequiredStones() recursively" << endl;
+		cerr << "not enough stones to cast spell " << spell_id << endl;
 		spells[spell_id].recursion_disabled = true;
 		getRequiredStones(spells[spell_id]);
 	}
@@ -716,12 +697,15 @@ Weight createDependency(float divisor, int tome_id)
 	if (tomes[tome_id].orange < 0)
 		return Weight((float)(abs(tomes[tome_id].orange)) / divisor, false, false, true, false);
 	else // yellow
-		return Weight((float)(abs(tomes[tome_id].yellow)) / divisor, true, false, false, true);
+		return Weight((float)(abs(tomes[tome_id].yellow)) / divisor, false, false, false, true);
 }
 
 void updateWeights(int id)
 {
 	float tmp;
+
+	if (!tomes[id].freeloader && tomes[id].distribution > 1)
+		return;
 
 	if (tomes[id].blue > 0)
 	{
@@ -734,7 +718,7 @@ void updateWeights(int id)
 				blue_weight.setWeight(tmp);
 			}
 		}
-		cerr << "updated blue weight: " << getWeight(blue_weight) << endl;
+		//cerr << "updated blue weight: " << getWeight(blue_weight) << endl;
 	}
 
 	if (tomes[id].green > 0)
@@ -754,7 +738,7 @@ void updateWeights(int id)
 			if (tmp < getWeight(green_weight))
 				green_weight = createDependency(tomes[id].green, id);
 		}
-		cerr << "updated green weight: " << getWeight(green_weight) << endl;
+		//cerr << "updated green weight: " << getWeight(green_weight) << endl;
 	}
 
 	if (tomes[id].orange > 0)
@@ -774,7 +758,7 @@ void updateWeights(int id)
 			if (tmp < getWeight(orange_weight))
 				orange_weight = createDependency(tomes[id].orange, id);
 		}
-		cerr << "updated orange weight: " << getWeight(orange_weight) << endl;
+		//cerr << "updated orange weight: " << getWeight(orange_weight) << endl;
 	}
 
 	if (tomes[id].yellow > 0)
@@ -794,7 +778,7 @@ void updateWeights(int id)
 			if (tmp < getWeight(yellow_weight))
 				yellow_weight = createDependency(tomes[id].yellow, id);
 		}
-		cerr << "updated yellow weight: " << getWeight(yellow_weight) << endl;
+		//cerr << "updated yellow weight: " << getWeight(yellow_weight) << endl;
 	}
 }
 
@@ -814,7 +798,7 @@ bool hasMutator()
 {
 	for (auto tome : tomes)
 	{
-		if (tome.second.mutator && tome.second.weighted >= MUTATOR_MINIMUM_GAIN)
+		if (tome.second.mutator && tome.second.weighted >= (2.99 * getWeight(blue_weight)))
 			return true;
 	}
 	return false;
@@ -855,7 +839,7 @@ int getOptimalMutator()
 
 	for (auto tome : tomes)
 	{
-		if (tome.second.mutator && tome.second.weighted >= MUTATOR_MINIMUM_GAIN)
+		if (tome.second.mutator && tome.second.weighted >= (2.99 * getWeight(blue_weight)))
 			tmp_tomes.push_back(tome.first);
 	}
 	for (auto i : tmp_tomes)
@@ -892,7 +876,10 @@ void getSpellFromTome(int id)
 		updateWeights(id);
 	}
 	else
+	{
+		cerr << "not enough stones to learn tome " << id << endl;
 		getRequiredStones(tomes[id]);
+	}
 }
 
 ////////////////////////////////////// CONTROL FLOW ///////////////////////////////////
@@ -902,26 +889,24 @@ void computeOutput()
 	if (hasFreeloader() || hasMutator())
 	{
 		int tome_id = getOptimalTome();
-		cerr << "target tome: " << tome_id << endl;
+		cerr << "focusing on learning tome " << tome_id << endl;
+
 		getSpellFromTome(tome_id);
-	}
-
-	else if (recipes[getOptimalProfitRecipe()].haveRequiredStones())
-	{
-		int recipe_id = getOptimalProfitRecipe();
-
-		cerr << "target recipe: " << recipe_id << endl;
-		cerr << "brewing recipe " << recipe_id << endl;
-		cout << "BREW " << recipe_id << endl;
 	}
 
 	else
 	{
-		int recipe_id = getOptimalProfitRecipe();
+		int recipe_id = getMostEfficientRecipe();
+		cerr << "focusing on brewing recipe " << recipe_id << endl;
 
-		cerr << "target recipe: " << recipe_id << endl;
-		cerr << "not enough stones for recipe: " << recipe_id << endl;
-		getRequiredStones(recipes[recipe_id]);
+		if (recipes[recipe_id].haveRequiredStones())
+			cout << "BREW " << recipe_id << endl;
+
+		else
+		{
+			cerr << "not enough stones to brew recipe " << recipe_id << endl;
+			getRequiredStones(recipes[recipe_id]);
+		}
 	}
 }
 
@@ -933,6 +918,6 @@ int main()
 	{
 		processInput();
 		computeOutput();
-		//printData();
+		printData();
 	}
 }
