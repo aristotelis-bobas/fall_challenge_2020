@@ -3,7 +3,7 @@ My bot's source code for CodinGame's Fall Challenge 2020.
 
 <a href="https://ibb.co/Wpckr89"><img src="https://i.ibb.co/YTtc5n9/Screenshot-from-2020-11-14-15-27-09.png" alt="Screenshot-from-2020-11-14-15-27-09" border="0"></a>
 
-# version 1.0
+# version 1
 
 My first version's strategy is based on a weight distribution system for the different available stones. <br>
 The weight is based on the amount of spells it takes to get a single unit of each stone. <br>
@@ -26,7 +26,7 @@ Key flaws of version 1: <br>
 
 <br>
 
-# version 2.0
+# version 2
 
 During the 3rd day of the competition I reached the limit of the strategy I was using and started working on a new strategy to optimize my decision making. <br> <br>
 It became obvious to me that I needed a graph / tree searching algorithm for optimal results. 
