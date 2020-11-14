@@ -24,9 +24,7 @@ Key flaws of version 1: <br>
 - greedy algorithm, no complete computation of all steps, only locally best option
 - circular dependencies if I wanted to implement stone value dependencies in mutator spells
 
-<br>
-
 # version 2
 
-During the 3rd day of the competition I reached the limit of the strategy I was using and started working on a new strategy to optimize my decision making. <br> <br>
+During the 3rd day of the competition I reached the limit of the first strategy I was using and started working on a new strategy to optimize my decision making. <br>
 It became obvious to me that I needed a graph / tree searching algorithm for optimal results. 
