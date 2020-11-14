@@ -1,4 +1,4 @@
-#include <iostream>
+// updateDependencies#include <iostream>
 #include <string>
 #include <map>
 #include <vector>
@@ -69,28 +69,10 @@ struct Action : public Stones
 	}
 };
 
-struct Weight
-{
-	float weight;
-	float factor;
-	bool blue_dep = false;
-	bool green_dep = false;
-	bool orange_dep = false;
-	bool yellow_dep = false;
-
-	Weight(float factor, bool blue_dep, bool green_dep, bool orange_dep, bool yellow_dep)
-		: factor(factor), blue_dep(blue_dep), green_dep(green_dep), orange_dep(orange_dep), yellow_dep(yellow_dep) {}
-
-	void setWeight(float weight) { this->weight = weight; }
-};
-
-Weight blue_weight(0, false, false, false, false);
-Weight green_weight(2, true, false, false, false);
-Weight orange_weight(2, false, true, false, false);
-Weight yellow_weight(2, false, false, true, false);
-
-// need declaration here for Action classes
-float getWeight(Weight &color);
+float blue_weight = 0.5;
+float green_weight = 1;
+float orange_weight = 2;
+float yellow_weight = 3;
 
 struct Recipe : public Action
 {
@@ -104,7 +86,7 @@ struct Recipe : public Action
 	Recipe(int delta0, int delta1, int delta2, int delta3, int price)
 		: Action(delta0, delta1, delta2, delta3), price(price)
 	{
-		weighted_cost = getWeight(blue_weight) * abs(blue) + getWeight(green_weight) * abs(green) + getWeight(orange_weight) * abs(orange) + getWeight(yellow_weight) * abs(yellow);
+		weighted_cost = blue_weight * abs(blue) + green_weight * abs(green) + orange_weight * abs(orange) + yellow_weight * abs(yellow);
 
 		{
 			distribution = 0;
@@ -138,10 +120,10 @@ struct Spell : public Action
 	{
 		weighted_cost = 0;
 		weighted_gain = 0;
-		(blue <= 0) ? weighted_cost += getWeight(blue_weight) * abs(blue) : weighted_gain += getWeight(blue_weight) * blue;
-		(green <= 0) ? weighted_cost += getWeight(green_weight) * abs(green) : weighted_gain += getWeight(green_weight) * green;
-		(orange <= 0) ? weighted_cost += getWeight(orange_weight) * abs(orange) : weighted_gain += getWeight(orange_weight) * orange;
-		(yellow <= 0) ? weighted_cost += getWeight(yellow_weight) * abs(yellow) : weighted_gain += getWeight(yellow_weight) * yellow;
+		(blue <= 0) ? weighted_cost += blue_weight * abs(blue) : weighted_gain += blue_weight * blue;
+		(green <= 0) ? weighted_cost += green_weight * abs(green) : weighted_gain += green_weight * green;
+		(orange <= 0) ? weighted_cost += orange_weight * abs(orange) : weighted_gain += orange_weight * orange;
+		(yellow <= 0) ? weighted_cost += yellow_weight * abs(yellow) : weighted_gain += yellow_weight * yellow;
 		weighted = weighted_gain - weighted_cost;
 	}
 };
@@ -163,10 +145,10 @@ struct Tome : public Action
 	{
 		weighted_cost = 0;
 		weighted_gain = 0;
-		(blue <= 0) ? weighted_cost += getWeight(blue_weight) * abs(blue) : weighted_gain += getWeight(blue_weight) * blue;
-		(green <= 0) ? weighted_cost += getWeight(green_weight) * abs(green) : weighted_gain += getWeight(green_weight) * green;
-		(orange <= 0) ? weighted_cost += getWeight(orange_weight) * abs(orange) : weighted_gain += getWeight(orange_weight) * orange;
-		(yellow <= 0) ? weighted_cost += getWeight(yellow_weight) * abs(yellow) : weighted_gain += getWeight(yellow_weight) * yellow;
+		(blue <= 0) ? weighted_cost += blue_weight * abs(blue) : weighted_gain += blue_weight * blue;
+		(green <= 0) ? weighted_cost += green_weight * abs(green) : weighted_gain += green_weight * green;
+		(orange <= 0) ? weighted_cost += orange_weight * abs(orange) : weighted_gain += orange_weight * orange;
+		(yellow <= 0) ? weighted_cost += yellow_weight * abs(yellow) : weighted_gain += yellow_weight * yellow;
 		weighted = weighted_gain - weighted_cost;
 
 		{
@@ -243,8 +225,8 @@ map<int, Spell> spells;
 void printWeight()
 {
 	cerr << "-------------WEIGHTS-------------" << endl;
-	cerr << "stone value distribution currently [" << getWeight(blue_weight) << ", ";
-	cerr << getWeight(green_weight) << ", " << getWeight(orange_weight) << ", " << getWeight(yellow_weight) << "]" << endl;
+	cerr << "stone value distribution currently [" << blue_weight << ", ";
+	cerr << green_weight << ", " << orange_weight << ", " << yellow_weight << "]" << endl;
 }
 
 void printSpells()
@@ -674,32 +656,6 @@ void getRequiredStones(T action)
 
 ////////////////////////////////////// WEIGHTS ///////////////////////////////////
 
-float getWeight(Weight &color)
-{
-	if (color.blue_dep)
-		return color.factor * getWeight(blue_weight);
-	else if (color.green_dep)
-		return color.factor * getWeight(green_weight);
-	else if (color.orange_dep)
-		return color.factor * getWeight(orange_weight);
-	else if (color.yellow_dep)
-		return color.factor * getWeight(yellow_weight);
-	else
-		return color.weight;
-}
-
-Weight createDependency(float divisor, int tome_id)
-{
-	if (tomes[tome_id].blue < 0)
-		return Weight((float)(abs(tomes[tome_id].blue)) / divisor, true, false, false, false);
-	if (tomes[tome_id].green < 0)
-		return Weight((float)(abs(tomes[tome_id].green)) / divisor, false, true, false, false);
-	if (tomes[tome_id].orange < 0)
-		return Weight((float)(abs(tomes[tome_id].orange)) / divisor, false, false, true, false);
-	else // yellow
-		return Weight((float)(abs(tomes[tome_id].yellow)) / divisor, false, false, false, true);
-}
-
 void updateWeights(int id)
 {
 	float tmp;
@@ -712,13 +668,9 @@ void updateWeights(int id)
 		if (tomes[id].freeloader)
 		{
 			tmp = 1.0 / tomes[id].blue;
-			if (tmp < getWeight(blue_weight))
-			{
-				blue_weight = Weight(0, false, false, false, false);
-				blue_weight.setWeight(tmp);
-			}
+			if (tmp < blue_weight)
+				blue_weight = tmp;
 		}
-		//cerr << "updated blue weight: " << getWeight(blue_weight) << endl;
 	}
 
 	if (tomes[id].green > 0)
@@ -726,19 +678,15 @@ void updateWeights(int id)
 		if (tomes[id].freeloader)
 		{
 			tmp = 1.0 / tomes[id].green;
-			if (tmp < getWeight(green_weight))
-			{
-				green_weight = Weight(0, false, false, false, false);
-				green_weight.setWeight(tmp);
-			}
+			if (tmp < green_weight)
+				green_weight = tmp;
 		}
 		else
 		{
 			tmp = tomes[id].weighted_cost / tomes[id].green;
-			if (tmp < getWeight(green_weight))
-				green_weight = createDependency(tomes[id].green, id);
+			if (tmp < green_weight)
+				green_weight = tmp;
 		}
-		//cerr << "updated green weight: " << getWeight(green_weight) << endl;
 	}
 
 	if (tomes[id].orange > 0)
@@ -746,19 +694,15 @@ void updateWeights(int id)
 		if (tomes[id].freeloader)
 		{
 			tmp = 1.0 / tomes[id].orange;
-			if (tmp < getWeight(orange_weight))
-			{
-				orange_weight = Weight(0, false, false, false, false);
-				orange_weight.setWeight(tmp);
-			}
+			if (tmp < orange_weight)
+				orange_weight = tmp;
 		}
 		else
 		{
 			tmp = tomes[id].weighted_cost / tomes[id].orange;
-			if (tmp < getWeight(orange_weight))
-				orange_weight = createDependency(tomes[id].orange, id);
+			if (tmp < orange_weight)
+				orange_weight = tmp;
 		}
-		//cerr << "updated orange weight: " << getWeight(orange_weight) << endl;
 	}
 
 	if (tomes[id].yellow > 0)
@@ -766,19 +710,15 @@ void updateWeights(int id)
 		if (tomes[id].freeloader)
 		{
 			tmp = 1.0 / tomes[id].yellow;
-			if (tmp < getWeight(yellow_weight))
-			{
-				yellow_weight = Weight(0, false, false, false, false);
-				yellow_weight.setWeight(tmp);
-			}
+			if (tmp < yellow_weight)
+				yellow_weight = tmp;
 		}
 		else
 		{
 			tmp = tomes[id].weighted_cost / tomes[id].yellow;
-			if (tmp < getWeight(yellow_weight))
-				yellow_weight = createDependency(tomes[id].yellow, id);
+			if (tmp < yellow_weight)
+				yellow_weight = tmp;
 		}
-		//cerr << "updated yellow weight: " << getWeight(yellow_weight) << endl;
 	}
 }
 
@@ -798,7 +738,7 @@ bool hasMutator()
 {
 	for (auto tome : tomes)
 	{
-		if (tome.second.mutator && tome.second.weighted >= (2.99 * getWeight(blue_weight)))
+		if (tome.second.mutator && tome.second.weighted >= (2.99 * blue_weight))
 			return true;
 	}
 	return false;
@@ -839,7 +779,7 @@ int getOptimalMutator()
 
 	for (auto tome : tomes)
 	{
-		if (tome.second.mutator && tome.second.weighted >= (2.99 * getWeight(blue_weight)))
+		if (tome.second.mutator && tome.second.weighted >= (2.99 * blue_weight))
 			tmp_tomes.push_back(tome.first);
 	}
 	for (auto i : tmp_tomes)
@@ -912,8 +852,6 @@ void computeOutput()
 
 int main()
 {
-	blue_weight.setWeight(0.5);
-
 	while (true)
 	{
 		processInput();
