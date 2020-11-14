@@ -1,9 +1,9 @@
-// updateDependencies#include <iostream>
+#include <iostream>
 #include <string>
 #include <map>
 #include <vector>
 
-#define TOME_MAX_DISTRO 2
+#define TOME_MAX_DISTRO 1
 #define TOME_MAX_DEPTH 4
 
 using namespace std;
@@ -101,7 +101,7 @@ struct Recipe : public Action
 				distribution++;
 		}
 
-		efficiency = ((3 * (float)price / weighted_cost) + distribution) / 4.0;
+		efficiency = ((3 * (float)price / weighted_cost) + 2 * distribution) / 5.0;
 	}
 };
 
@@ -257,7 +257,7 @@ void printTomes()
 
 		// cerr << "tome " << x.first << " weighted_cost: " << x.second.weighted_cost << endl;
 		// cerr << "tome " << x.first << " weighted_gain: " << x.second.weighted_gain << endl;
-		//cerr << "tome " << x.first << " weighted: " << x.second.weighted << endl;
+		// cerr << "tome " << x.first << " weighted: " << x.second.weighted << endl;
 		// cerr << "tome " << x.first << " distribution: " << x.second.distribution << endl;
 		// cerr << "tome " << x.first << " freeloader: " << x.second.freeloader << endl;
 		// cerr << "tome " << x.first << " mutator: " << x.second.mutator << endl;
@@ -563,28 +563,28 @@ int getOptimalSpell(vector<int> missing)
 
 	for (auto i : eligible_spells)
 	{
-		int gain = 0;
+		int gathered = 0;
 
 		if (spells[i].blue > 0 && missing[0] > 0)
-			gain += spells[i].blue;
+			gathered = (spells[i].blue > missing[0]) ? gathered + missing[0] : gathered + spells[i].blue;
 		if (spells[i].green > 0 && missing[1] > 0)
-			gain += spells[i].green;
+			gathered = (spells[i].green > missing[1]) ? gathered + missing[1] : gathered + spells[i].green;
 		if (spells[i].orange > 0 && missing[2] > 0)
-			gain += spells[i].orange;
+			gathered = (spells[i].orange > missing[2]) ? gathered + missing[2] : gathered + spells[i].orange;
 		if (spells[i].yellow > 0 && missing[3] > 0)
-			gain += spells[i].yellow;
+			gathered = (spells[i].yellow > missing[3]) ? gathered + missing[3] : gathered + spells[i].yellow;
 
-		if (gain >= highest_gain)
+		if (gathered >= highest_gain)
 		{
 			if (ret != -1)
 			{
-				if (gain == highest_gain)
+				if (gathered == highest_gain)
 				{
 					if (spells[i].weighted_cost > spells[ret].weighted_cost)
 						continue;
 				}
 			}
-			highest_gain = gain;
+			highest_gain = gathered;
 			ret = i;
 		}
 	}
@@ -660,8 +660,8 @@ void updateWeights(int id)
 {
 	float tmp;
 
-	if (!tomes[id].freeloader && tomes[id].distribution > 1)
-		return;
+	// if (!tomes[id].freeloader && tomes[id].distribution > 1)
+	// 	return;
 
 	if (tomes[id].blue > 0)
 	{
@@ -678,14 +678,12 @@ void updateWeights(int id)
 		if (tomes[id].freeloader)
 		{
 			tmp = 1.0 / tomes[id].green;
-			if (tmp < green_weight)
-				green_weight = tmp;
+			green_weight = (tmp < green_weight) ? tmp : green_weight;
 		}
 		else
 		{
-			tmp = tomes[id].weighted_cost / tomes[id].green;
-			if (tmp < green_weight)
-				green_weight = tmp;
+			tmp = (tomes[id].weighted_cost * ((tomes[id].green * green_weight) / tomes[id].weighted_gain)) / tomes[id].green;
+			green_weight = (tmp < green_weight) ? tmp : green_weight;
 		}
 	}
 
@@ -694,14 +692,12 @@ void updateWeights(int id)
 		if (tomes[id].freeloader)
 		{
 			tmp = 1.0 / tomes[id].orange;
-			if (tmp < orange_weight)
-				orange_weight = tmp;
+			orange_weight = (tmp < orange_weight) ? tmp : orange_weight;
 		}
 		else
 		{
-			tmp = tomes[id].weighted_cost / tomes[id].orange;
-			if (tmp < orange_weight)
-				orange_weight = tmp;
+			tmp = (tomes[id].weighted_cost * ((tomes[id].orange * orange_weight) / tomes[id].weighted_gain)) / tomes[id].orange;
+			orange_weight = (tmp < orange_weight) ? tmp : orange_weight;
 		}
 	}
 
@@ -710,14 +706,12 @@ void updateWeights(int id)
 		if (tomes[id].freeloader)
 		{
 			tmp = 1.0 / tomes[id].yellow;
-			if (tmp < yellow_weight)
-				yellow_weight = tmp;
+			yellow_weight = (tmp < yellow_weight) ? tmp : yellow_weight;
 		}
 		else
 		{
-			tmp = tomes[id].weighted_cost / tomes[id].yellow;
-			if (tmp < yellow_weight)
-				yellow_weight = tmp;
+			tmp = (tomes[id].weighted_cost * ((tomes[id].yellow * yellow_weight) / tomes[id].weighted_gain)) / tomes[id].yellow;
+			yellow_weight = (tmp < yellow_weight) ? tmp : yellow_weight;
 		}
 	}
 }
@@ -826,7 +820,7 @@ void getSpellFromTome(int id)
 
 void computeOutput()
 {
-	if (hasFreeloader() || hasMutator())
+	if (inv.score < 30 && (hasFreeloader() || hasMutator()))
 	{
 		int tome_id = getOptimalTome();
 		cerr << "focusing on learning tome " << tome_id << endl;
