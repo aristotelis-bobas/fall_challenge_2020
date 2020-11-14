@@ -1,6 +1,8 @@
 # fall_challenge_2020
 My bot's source code for CodinGame's Fall Challenge 2020.
 
+<a href="https://ibb.co/Wpckr89"><img src="https://i.ibb.co/YTtc5n9/Screenshot-from-2020-11-14-15-27-09.png" alt="Screenshot-from-2020-11-14-15-27-09" border="0"></a>
+
 # version 1.0
 
 My first version is based on a weight distribution system for the different available stones. <br>
