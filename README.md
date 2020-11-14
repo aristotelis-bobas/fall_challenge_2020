@@ -22,7 +22,7 @@ Key flaws of version 1: <br>
 
 - The exact amount of steps (including resting in between spells) were not taken into account while calculating a recipe or spell's efficiency, instead I used a more abstract weight distribution system to calculcate efficiency.
 - Greedy algorithm: no complete computation of all steps, only locally best option.
-- Circular dependencies if I wanted to implement stone value dependencies in mutator spells.
+- Circular dependencies if I wanted to implement stone value dependencies in mutator spells for more accurate weight distribution.
 
 # version 2
 
