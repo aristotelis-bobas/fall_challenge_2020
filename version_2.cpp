@@ -2,28 +2,19 @@
 #include <string>
 #include <map>
 #include <vector>
+#include <cmath>
 
 #define CREATION_SIMULATION_DEPTH 4
-#define PRICE_WEIGHT 4
+#define PRICE_WEIGHT 1
+#define STEPS_WEIGHT 1
 #define MUTATOR_COST_SPREAD 1
 #define MUTATOR_GAIN_SPREAD 1
-#define MUTATOR_COST_DEPTH 3
-#define MUTATOR_CUTOFF_RATE 0.2
+#define MUTATOR_COST_DEPTH 4
+#define MUTATOR_CUTOFF_RATE 0
 
 using namespace std;
 
-////////////////////////////////////// OBJECTS ///////////////////////////////////
-
-struct Recursion
-{
-	static int level;
-
-	static int getLevel() { return level; }
-	static int setLevel(int level) { Recursion::level = level; }
-	static int incLevel() { Recursion::level++; }
-};
-
-int Recursion::level = 0;
+////////////////////////////////////// CLASSES ///////////////////////////////////
 
 struct Stones
 {
@@ -216,6 +207,14 @@ void restoreSpellRecursion(map<int, Spell> &spells)
 		spell.second.disable_recursion = false;
 }
 
+map<int, Recipe> g_recipes;
+map<int, Tome> g_tomes;
+map<int, Spell> g_spells;
+Inventory g_inv;
+vector<float> g_creation_rates(4, 0);
+
+////////////////////////////////////// SIMULATION CLASSES //////////////////////////////////////
+
 class Simulation : public Stones
 {
 public:
@@ -226,6 +225,8 @@ public:
 
 	Simulation(vector<int> missing, Inventory inv, map<int, Spell> spells, Recipe recipe)
 		: Stones(missing), inv(inv), spells(spells), recipe(recipe) {}
+
+	virtual int getSimulationSpecificSpell(vector<int> spells, vector<int> missing) = 0;
 
 	virtual bool simulationStonesMissing()
 	{
@@ -288,20 +289,11 @@ public:
 
 		return cleaning_spell;
 	}
-};
-
-class GreedySim : public Simulation
-{
-public:
-	GreedySim(Inventory inv, map<int, Spell> spells, Recipe recipe)
-		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
 
 	int getSimulationSpell(vector<int> missing)
 	{
 		vector<int> eligible_spells;
 		vector<int> productive_spells;
-		int gather_max = -1;
-		int ret = -1;
 
 		for (auto spell : spells)
 		{
@@ -320,29 +312,7 @@ public:
 				}
 			}
 		}
-
-		for (auto spell_id : productive_spells)
-		{
-			int gathered = 0;
-
-			for (int i = 0; i < 4; i++)
-			{
-				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
-					gathered = (spells[spell_id].stones[i] > missing[i]) ? gathered + missing[i] : gathered + spells[spell_id].stones[i];
-			}
-
-			if (gathered >= gather_max)
-			{
-				if (ret != -1 && gathered == gather_max)
-				{
-					if (spells[spell_id].cost_weighted > spells[ret].cost_weighted)
-						continue;
-				}
-				gather_max = gathered;
-				ret = spell_id;
-			}
-		}
-		return ret;
+		return getSimulationSpecificSpell(productive_spells, missing);
 	}
 
 	template <typename T>
@@ -374,7 +344,7 @@ public:
 		return;
 	}
 
-	int getSimulationSteps()
+	virtual int getSimulationSteps()
 	{
 		while (simulationStonesMissing())
 		{
@@ -385,11 +355,689 @@ public:
 	}
 };
 
-map<int, Recipe> g_recipes;
-map<int, Tome> g_tomes;
-map<int, Spell> g_spells;
-Inventory g_inv;
-vector<float> g_creation_rates(4, 0);
+class Simulation_1A_1 : public Simulation
+{
+public:
+	Simulation_1A_1(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered = (spells[spell_id].stones[i] > missing[i]) ? gathered + missing[i] : gathered + spells[spell_id].stones[i];
+			}
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].cost_weighted > spells[ret].cost_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_1B_1 : public Simulation
+{
+public:
+	Simulation_1B_1(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered = (spells[spell_id].stones[i] > missing[i]) ? gathered + missing[i] : gathered + spells[spell_id].stones[i];
+			}
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].gain_weighted < spells[ret].gain_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_1C_1 : public Simulation
+{
+public:
+	Simulation_1C_1(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered = (spells[spell_id].stones[i] > missing[i]) ? gathered + missing[i] : gathered + spells[spell_id].stones[i];
+			}
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].nett_weighted < spells[ret].nett_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_2A_1 : public Simulation
+{
+public:
+	Simulation_2A_1(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered += spells[spell_id].stones[i];
+			}
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].cost_weighted > spells[ret].cost_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_2B_1 : public Simulation
+{
+public:
+	Simulation_2B_1(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered += spells[spell_id].stones[i];
+			}
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].gain_weighted < spells[ret].gain_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_2C_1 : public Simulation
+{
+public:
+	Simulation_2C_1(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered += spells[spell_id].stones[i];
+			}
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].nett_weighted < spells[ret].nett_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_1A_2 : public Simulation
+{
+public:
+	Simulation_1A_2(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered = (spells[spell_id].stones[i] > missing[i]) ? gathered + missing[i] : gathered + spells[spell_id].stones[i];
+			}
+
+			if (ret != -1 && !spells[spell_id].avail && spells[ret].avail)
+				continue;
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].cost_weighted > spells[ret].cost_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_1B_2 : public Simulation
+{
+public:
+	Simulation_1B_2(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered = (spells[spell_id].stones[i] > missing[i]) ? gathered + missing[i] : gathered + spells[spell_id].stones[i];
+			}
+
+			if (ret != -1 && !spells[spell_id].avail && spells[ret].avail)
+				continue;
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].gain_weighted < spells[ret].gain_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_1C_2 : public Simulation
+{
+public:
+	Simulation_1C_2(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered = (spells[spell_id].stones[i] > missing[i]) ? gathered + missing[i] : gathered + spells[spell_id].stones[i];
+			}
+
+			if (ret != -1 && !spells[spell_id].avail && spells[ret].avail)
+				continue;
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].nett_weighted < spells[ret].nett_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_2A_2 : public Simulation
+{
+public:
+	Simulation_2A_2(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered += spells[spell_id].stones[i];
+			}
+
+			if (ret != -1 && !spells[spell_id].avail && spells[ret].avail)
+				continue;
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].cost_weighted > spells[ret].cost_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_2B_2 : public Simulation
+{
+public:
+	Simulation_2B_2(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered += spells[spell_id].stones[i];
+			}
+
+			if (ret != -1 && !spells[spell_id].avail && spells[ret].avail)
+				continue;
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].gain_weighted < spells[ret].gain_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_2C_2 : public Simulation
+{
+public:
+	Simulation_2C_2(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered += spells[spell_id].stones[i];
+			}
+
+			if (ret != -1 && !spells[spell_id].avail && spells[ret].avail)
+				continue;
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].nett_weighted < spells[ret].nett_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_1A_3 : public Simulation
+{
+public:
+	Simulation_1A_3(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered = (spells[spell_id].stones[i] > missing[i]) ? gathered + missing[i] : gathered + spells[spell_id].stones[i];
+			}
+
+			if (ret != -1 && !spells[spell_id].haveRequiredStones(inv) && spells[ret].haveRequiredStones(inv))
+				continue;
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].cost_weighted > spells[ret].cost_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_1B_3 : public Simulation
+{
+public:
+	Simulation_1B_3(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered = (spells[spell_id].stones[i] > missing[i]) ? gathered + missing[i] : gathered + spells[spell_id].stones[i];
+			}
+
+			if (ret != -1 && !spells[spell_id].haveRequiredStones(inv) && spells[ret].haveRequiredStones(inv))
+				continue;
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].gain_weighted < spells[ret].gain_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_1C_3 : public Simulation
+{
+public:
+	Simulation_1C_3(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered = (spells[spell_id].stones[i] > missing[i]) ? gathered + missing[i] : gathered + spells[spell_id].stones[i];
+			}
+
+			if (ret != -1 && !spells[spell_id].haveRequiredStones(inv) && spells[ret].haveRequiredStones(inv))
+				continue;
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].nett_weighted < spells[ret].nett_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_2A_3 : public Simulation
+{
+public:
+	Simulation_2A_3(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered += spells[spell_id].stones[i];
+			}
+
+			if (ret != -1 && !spells[spell_id].haveRequiredStones(inv) && spells[ret].haveRequiredStones(inv))
+				continue;
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].cost_weighted > spells[ret].cost_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_2B_3 : public Simulation
+{
+public:
+	Simulation_2B_3(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered += spells[spell_id].stones[i];
+			}
+
+			if (ret != -1 && !spells[spell_id].haveRequiredStones(inv) && spells[ret].haveRequiredStones(inv))
+				continue;
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].gain_weighted < spells[ret].gain_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
+
+class Simulation_2C_3 : public Simulation
+{
+public:
+	Simulation_2C_3(Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
+
+	int getSimulationSpecificSpell(vector<int> available_spells, vector<int> missing)
+	{
+		int gather_max = 0;
+		int ret = -1;
+
+		for (auto spell_id : available_spells)
+		{
+			int gathered = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
+					gathered += spells[spell_id].stones[i];
+			}
+
+			if (ret != -1 && !spells[spell_id].haveRequiredStones(inv) && spells[ret].haveRequiredStones(inv))
+				continue;
+
+			if (gathered >= gather_max)
+			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].nett_weighted < spells[ret].nett_weighted)
+						continue;
+				}
+				gather_max = gathered;
+				ret = spell_id;
+			}
+		}
+		return ret;
+	}
+};
 
 ////////////////////////////////////// SPELL MECHANICS //////////////////////////////////////
 
@@ -466,7 +1114,7 @@ int getSpell(vector<int> missing)
 		{
 			if (ret != -1 && gathered == gather_max)
 			{
-				if (g_spells[spell_id].cost_weighted > g_spells[ret].cost_weighted)
+				if (g_spells[spell_id].gain_weighted < g_spells[ret].gain_weighted)
 					continue;
 			}
 			gather_max = gathered;
@@ -534,8 +1182,10 @@ int simulateCreationSteps(int blue, int green, int orange, int yellow, map<int, 
 	map<int, Spell> sim_spells = input_spells;
 	restoreSpellAvailability(sim_spells);
 
-	GreedySim greedy_sim(sim_inv, sim_spells, sim_recipe);
-	return greedy_sim.getSimulationSteps();
+	/// DO NOT CHANGE SIMULATION FOR STONE VALUATION UNLESS YOU ARE 200% SURE
+
+	Simulation_1A_1 sim(sim_inv, sim_spells, sim_recipe);
+	return sim.getSimulationSteps();
 }
 
 float getCreationRate(int tier, map<int, Spell> sim_spells = g_spells)
@@ -582,7 +1232,6 @@ float computeMutatorRate(Tome mutator)
 	int color = mutator.mutator_focus;
 	map<int, Spell> tmp_spells(g_spells);
 	tmp_spells.insert({1000, Spell(mutator, true, mutator.repeat)});
-
 	return g_creation_rates[color] - getCreationRate(color, tmp_spells);
 }
 
@@ -607,7 +1256,7 @@ int getOptimalMutator()
 	{
 		if (tome.second.mutator)
 		{
-			if (tome.second.mutator_rate >= MUTATOR_CUTOFF_RATE)
+			if (tome.second.mutator_rate > MUTATOR_CUTOFF_RATE)
 				tmp_tomes.push_back(tome.first);
 		}
 	}
@@ -624,9 +1273,9 @@ int getOptimalMutator()
 
 int getOptimalFreeloader()
 {
-	int color_max = 0;
+	int color_max = -1;
 	vector<int> tmp_tomes;
-	int ret = 0;
+	int ret = -1;
 
 	for (auto tome : g_tomes)
 	{
@@ -644,13 +1293,17 @@ int getOptimalFreeloader()
 				highest_color = i;
 		}
 
-		if (highest_color > color_max)
+		if (highest_color >= color_max)
 		{
+			if (ret != -1 && highest_color == color_max)
+			{
+				if (g_tomes[i].gain_depth < g_tomes[ret].gain_depth)
+					continue;
+			}
 			ret = i;
 			color_max = highest_color;
 		}
 	}
-
 	return ret;
 }
 
@@ -672,7 +1325,7 @@ bool mutatorAvailable()
 	{
 		if (tome.second.mutator)
 		{
-			if (tome.second.mutator_rate >= MUTATOR_CUTOFF_RATE)
+			if (tome.second.mutator_rate > MUTATOR_CUTOFF_RATE)
 				return true;
 		}
 	}
@@ -700,13 +1353,64 @@ bool tomeAvailable()
 
 int simulateRecipeSteps(int id)
 {
-	Inventory sim_inv(0, 0, 0, 0, 0);
-	map<int, Spell> sim_spells(g_spells);
+	int simulation_results[18];
 
-	restoreSpellAvailability(sim_spells);
-	GreedySim sim(sim_inv, sim_spells, g_recipes[id]);
+	for (int i = 0; i < 18; i++)
+	{
+		Inventory sim_inv(0, 0, 0, 0, 0); // enable this to base it on empty inv
+		map<int, Spell> sim_spells(g_spells);
+		restoreSpellAvailability(sim_spells);
 
-	return sim.getSimulationSteps();
+		if (i == 0)
+			simulation_results[i] = Simulation_1A_1(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 1)
+			simulation_results[i] = Simulation_1B_1(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 2)
+			simulation_results[i] = Simulation_1C_1(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 3)
+			simulation_results[i] = Simulation_2A_1(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 4)
+			simulation_results[i] = Simulation_2B_1(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 5)
+			simulation_results[i] = Simulation_2C_1(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 6)
+			simulation_results[i] = Simulation_1A_2(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 7)
+			simulation_results[i] = Simulation_1B_2(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 8)
+			simulation_results[i] = Simulation_1C_2(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 9)
+			simulation_results[i] = Simulation_2A_2(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 10)
+			simulation_results[i] = Simulation_2B_2(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 11)
+			simulation_results[i] = Simulation_2C_2(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 12)
+			simulation_results[i] = Simulation_1A_3(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 13)
+			simulation_results[i] = Simulation_1B_3(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 14)
+			simulation_results[i] = Simulation_1C_3(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 15)
+			simulation_results[i] = Simulation_2A_3(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 16)
+			simulation_results[i] = Simulation_2B_3(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+		else if (i == 17)
+			simulation_results[i] = Simulation_2C_3(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
+	}
+
+	int lowest = 1000;
+
+	cerr << "[";
+
+	for (int i = 0; i < 18; i++)
+	{
+		cerr << simulation_results[i];
+		(i == 17) ? cerr << "]" << endl : cerr << ", ";
+		if (simulation_results[i] < lowest)
+			lowest = simulation_results[i];
+	}
+	return lowest;
 }
 
 void computeRecipeRates()
@@ -717,9 +1421,9 @@ void computeRecipeRates()
 	for (auto &recipe : g_recipes)
 	{
 		id = recipe.first;
+		cerr << "[Simulation Results for recipe " << id << "]" << endl;
 		steps = simulateRecipeSteps(id);
-		recipe.second.rate = (PRICE_WEIGHT * g_recipes[id].price) / (float)steps;
-		//cerr << "[GreedySim] recipe " << id << " -- " << steps << " steps -- " << recipe.second.price << " price -- " << recipe.second.rate << " rate " << endl;
+		recipe.second.rate = pow(g_recipes[id].price, PRICE_WEIGHT) / pow((float)steps, STEPS_WEIGHT);
 	}
 }
 
@@ -748,7 +1452,7 @@ int getOptimalRecipe()
 
 void computeOutput()
 {
-	if (tomeAvailable())
+	if (tomeAvailable() && g_inv.score < 30)
 	{
 		int tome_id = getOptimalTome();
 		cerr << "focusing on learning tome " << tome_id << endl;
