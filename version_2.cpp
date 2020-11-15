@@ -5,12 +5,14 @@
 #include <cmath>
 
 #define CREATION_SIMULATION_DEPTH 4
-#define PRICE_WEIGHT 1
+#define PRICE_WEIGHT 2
 #define STEPS_WEIGHT 1
 #define MUTATOR_COST_SPREAD 1
 #define MUTATOR_GAIN_SPREAD 1
-#define MUTATOR_COST_DEPTH 4
-#define MUTATOR_CUTOFF_RATE 0
+#define MUTATOR_COST_DEPTH 3
+#define MUTATOR_CUTOFF_RATE 0.15
+
+// #define SIM_RESULTS 
 
 using namespace std;
 
@@ -81,19 +83,12 @@ class Recipe : public Action
 public:
 	int price;
 	int spread;
+	int steps_needed = 0;
 	float rate = 0;
 
 	Recipe() {}
 	Recipe(int blue, int green, int orange, int yellow, int price)
-		: Action(blue, green, orange, yellow), price(price)
-	{
-		spread = 0;
-		for (int i = 0; i < 4; i++)
-		{
-			if (stones[i] < 0)
-				spread++;
-		}
-	}
+		: Action(blue, green, orange, yellow), price(price) {}
 };
 
 class Tome : public Action
@@ -172,6 +167,8 @@ public:
 	float cost_weighted;
 	float gain_weighted;
 	float nett_weighted;
+	bool repeat_flag = false;
+	int repeat_value = 0;
 	bool disable_recursion = false;
 
 	Spell() {}
@@ -212,6 +209,9 @@ map<int, Tome> g_tomes;
 map<int, Spell> g_spells;
 Inventory g_inv;
 vector<float> g_creation_rates(4, 0);
+int enemy_score;
+int potions_brewed = 0;
+int turn = 0;
 
 ////////////////////////////////////// SIMULATION CLASSES //////////////////////////////////////
 
@@ -222,6 +222,7 @@ public:
 	map<int, Spell> spells;
 	vector<int> log;
 	Recipe recipe;
+	bool error = false;
 
 	Simulation(vector<int> missing, Inventory inv, map<int, Spell> spells, Recipe recipe)
 		: Stones(missing), inv(inv), spells(spells), recipe(recipe) {}
@@ -321,7 +322,10 @@ public:
 		int spell_id = getSimulationSpell(action.getMissingStones(inv));
 
 		if (spell_id < 0)
+		{
 			spell_id = getSimulationCleaningSpell();
+			error = true;
+		}
 
 		if (!spells[spell_id].avail)
 		{
@@ -346,10 +350,12 @@ public:
 
 	virtual int getSimulationSteps()
 	{
-		while (simulationStonesMissing())
+		while (simulationStonesMissing() && !error)
 		{
 			restoreSpellRecursion(spells);
 			simulateAcquiringStones(recipe);
+			if (error)
+				return 42; // this will not be fatal, I hope
 		}
 		return log.size();
 	}
@@ -1075,6 +1081,53 @@ int getCleaningSpell()
 	return cleaning_spell;
 }
 
+bool canRepeat(vector<int> missing, int spell_id)
+{
+	for (int i = 0; i < 4; i++)
+	{
+		if (g_spells[spell_id].stones[i] > 0 && missing[i] > 0)
+		{
+			if (g_spells[spell_id].stones[i] < missing[i] && g_spells[spell_id].repeat)
+			{
+				Spell tmp(g_spells[spell_id]);
+
+				if (!Spell(tmp.stones[0] * 2, tmp.stones[1] * 2, tmp.stones[2] * 2, tmp.stones[3] * 2, tmp.avail, tmp.repeat).willOverflowInventory(g_inv))
+					return true;
+			}
+		}
+	}
+	return false;
+}
+
+void alterRepeatingSpell(vector<int> missing, Spell &spell)
+{
+	bool complete = false;
+	int repeat_count = 0;
+
+	for (int i = 0; i < 4; i++)
+	{
+		if (spell.stones[i] > 0 && missing[i] > 0)
+		{
+			if (ceil((float)missing[i] / spell.stones[i]) > repeat_count)
+				repeat_count = ceil((float)missing[i] / spell.stones[i]);
+		}
+	}
+
+	for (int mult = repeat_count; mult > 1; mult--)
+	{
+		if (!Spell(spell.stones[0] * mult, spell.stones[1] * mult, spell.stones[2] * mult, spell.stones[3] * mult, spell.avail, spell.repeat).willOverflowInventory(g_inv))
+		{
+			for (int i = 0; i < 4; i++)
+				spell.stones[i] = spell.stones[i] * mult;
+			
+			spell.repeat_flag = true;
+			spell.repeat_value = mult;
+			return;
+		}
+	}
+
+}
+
 int getSpell(vector<int> missing)
 {
 	vector<int> eligible_spells;
@@ -1104,6 +1157,9 @@ int getSpell(vector<int> missing)
 	{
 		int gathered = 0;
 
+		if (canRepeat(missing, spell_id))
+			alterRepeatingSpell(missing, g_spells[spell_id]);
+
 		for (int i = 0; i < 4; i++)
 		{
 			if (g_spells[spell_id].stones[i] > 0 && missing[i] > 0)
@@ -1114,7 +1170,7 @@ int getSpell(vector<int> missing)
 		{
 			if (ret != -1 && gathered == gather_max)
 			{
-				if (g_spells[spell_id].gain_weighted < g_spells[ret].gain_weighted)
+				if (g_spells[spell_id].cost_weighted > g_spells[ret].cost_weighted)
 					continue;
 			}
 			gather_max = gathered;
@@ -1140,7 +1196,10 @@ void getRequiredStones(T action)
 
 	if (g_spells[spell_id].haveRequiredStones(g_inv))
 	{
-		cout << "CAST " << spell_id << endl;
+		if (g_spells[spell_id].repeat_flag)
+			cout << "CAST " << spell_id << " " << g_spells[spell_id].repeat_value << endl;
+		else
+			cout << "CAST " << spell_id << endl;
 		return;
 	}
 
@@ -1183,6 +1242,7 @@ int simulateCreationSteps(int blue, int green, int orange, int yellow, map<int, 
 	restoreSpellAvailability(sim_spells);
 
 	/// DO NOT CHANGE SIMULATION FOR STONE VALUATION UNLESS YOU ARE 200% SURE
+	// MAJOR DEPENDENCIES
 
 	Simulation_1A_1 sim(sim_inv, sim_spells, sim_recipe);
 	return sim.getSimulationSteps();
@@ -1222,7 +1282,11 @@ float getCreationRate(int tier, map<int, Spell> sim_spells = g_spells)
 void computeCreationRates()
 {
 	for (int i = 0; i < 4; i++)
-		g_creation_rates[i] = getCreationRate(i);
+	{
+		float tmp = getCreationRate(i);
+		if (g_creation_rates[i] > tmp)
+			g_creation_rates[i] = tmp;
+	}
 }
 
 ////////////////////////////////////// TOME RATES ///////////////////////////////////
@@ -1283,13 +1347,13 @@ int getOptimalFreeloader()
 			tmp_tomes.push_back(tome.first);
 	}
 
-	for (auto i : tmp_tomes)
+	for (auto id : tmp_tomes)
 	{
-		int highest_color = 0;
+		int highest_color = -1;
 
 		for (int i = 0; i < 4; i++)
 		{
-			if (g_tomes[i].stones[i] > 0)
+			if (g_tomes[id].stones[i] > 0)
 				highest_color = i;
 		}
 
@@ -1297,10 +1361,10 @@ int getOptimalFreeloader()
 		{
 			if (ret != -1 && highest_color == color_max)
 			{
-				if (g_tomes[i].gain_depth < g_tomes[ret].gain_depth)
+				if (g_tomes[id].gain_depth < g_tomes[ret].gain_depth)
 					continue;
 			}
-			ret = i;
+			ret = id;
 			color_max = highest_color;
 		}
 	}
@@ -1332,6 +1396,16 @@ bool mutatorAvailable()
 	return false;
 }
 
+int getFreeTome()
+{
+	for (auto tome : g_tomes)
+	{
+		if (tome.second.tax_cost == 0)
+			return tome.first;
+	}
+	return -1;
+}
+
 int getOptimalTome()
 {
 	if (freeloaderAvailable())
@@ -1351,7 +1425,7 @@ bool tomeAvailable()
 
 ////////////////////////////////////// RECIPE MECHANICS //////////////////////////////////////
 
-int simulateRecipeSteps(int id)
+void massSimulations(int id)
 {
 	int simulation_results[18];
 
@@ -1399,18 +1473,22 @@ int simulateRecipeSteps(int id)
 			simulation_results[i] = Simulation_2C_3(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
 	}
 
-	int lowest = 1000;
-
 	cerr << "[";
-
 	for (int i = 0; i < 18; i++)
 	{
 		cerr << simulation_results[i];
 		(i == 17) ? cerr << "]" << endl : cerr << ", ";
-		if (simulation_results[i] < lowest)
-			lowest = simulation_results[i];
 	}
-	return lowest;
+}
+
+int simulateRecipeSteps(int id)
+{
+	Inventory sim_inv(0, 0, 0, 0, 0);
+	map<int, Spell> sim_spells(g_spells);
+	restoreSpellAvailability(sim_spells);
+
+	Simulation_1A_1 sim(sim_inv, sim_spells, g_recipes[id]);
+	return sim.getSimulationSteps();
 }
 
 void computeRecipeRates()
@@ -1421,10 +1499,38 @@ void computeRecipeRates()
 	for (auto &recipe : g_recipes)
 	{
 		id = recipe.first;
+
+#ifdef SIM_RESULTS
+
 		cerr << "[Simulation Results for recipe " << id << "]" << endl;
+		massSimulations(id);
+#endif
+
 		steps = simulateRecipeSteps(id);
+		recipe.second.steps_needed = steps;
 		recipe.second.rate = pow(g_recipes[id].price, PRICE_WEIGHT) / pow((float)steps, STEPS_WEIGHT);
 	}
+}
+
+int getQuickestRecipe()
+{
+	int min_steps = INT8_MAX;
+	int ret = -1;
+
+	for (auto recipe : g_recipes)
+	{
+		if (recipe.second.steps_needed <= min_steps)
+		{
+			if (ret != -1)
+			{ 
+				if (recipe.second.rate < g_recipes[ret].rate)
+					continue;
+			}
+			min_steps = recipe.second.steps_needed;
+			ret = recipe.first;
+		}
+	}
+	return ret;
 }
 
 int getOptimalRecipe()
@@ -1450,9 +1556,29 @@ int getOptimalRecipe()
 
 ////////////////////////////////////// CONTROL FLOW ///////////////////////////////////
 
+bool tomeLimits()
+{
+	if (g_spells.size() > 10)
+		return false;
+	if (g_inv.score > 30)
+		return false;
+	return true;
+}
+
+bool finishGame()
+{
+	if (g_inv.score >= enemy_score && potions_brewed >= 5)
+		return true;
+	if (g_inv.score >= enemy_score + 10 && potions_brewed >= 4)
+		return true;
+	if (g_inv.score >= enemy_score + 20 && potions_brewed >= 3)
+		return true;
+	return false;
+}
+
 void computeOutput()
 {
-	if (tomeAvailable() && g_inv.score < 30)
+	if (tomeAvailable() && tomeLimits())
 	{
 		int tome_id = getOptimalTome();
 		cerr << "focusing on learning tome " << tome_id << endl;
@@ -1468,11 +1594,14 @@ void computeOutput()
 
 	else
 	{
-		int recipe_id = getOptimalRecipe();
+		int recipe_id = (finishGame()) ? getQuickestRecipe() : getOptimalRecipe();
 		cerr << "focusing on brewing recipe " << recipe_id << endl;
 
 		if (g_recipes[recipe_id].haveRequiredStones(g_inv))
-			cout << "BREW " << recipe_id << endl;
+		{
+			cout << "BREW " << recipe_id << " HERE'S YOUR SHIT, SIR" << endl;
+			potions_brewed++;
+		}
 		else
 		{
 			cerr << "not enough stones to brew recipe " << recipe_id << endl;
@@ -1538,7 +1667,7 @@ void printRecipes()
 			cerr << recipe.second.stones[i];
 			(i == 3) ? cerr << "]" : cerr << ", ";
 		}
-		cerr << " - rate " << recipe.second.rate << " - " << recipe.second.price << " rupees" << endl;
+		cerr << " - rate " << recipe.second.rate << " - steps " << recipe.second.steps_needed << " - " << recipe.second.price << " rupees" << endl;
 	}
 }
 
@@ -1612,6 +1741,8 @@ void processInventory()
 
 		if (i == 0)
 			g_inv = Inventory(blue, green, orange, yellow, score);
+		if (i == 1)
+			enemy_score = score;
 	}
 }
 
@@ -1644,5 +1775,6 @@ int main()
 		processInput();
 		printData();
 		computeOutput();
+		turn++;
 	}
 }
