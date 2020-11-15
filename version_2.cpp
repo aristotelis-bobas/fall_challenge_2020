@@ -3,12 +3,12 @@
 #include <map>
 #include <vector>
 
-#define CREATION_SIMULATION_DEPTH 3
-#define PRICE_WEIGHT 3
+#define CREATION_SIMULATION_DEPTH 4
+#define PRICE_WEIGHT 4
 #define MUTATOR_COST_SPREAD 1
 #define MUTATOR_GAIN_SPREAD 1
 #define MUTATOR_COST_DEPTH 3
-#define MUTATOR_CUTOFF_RATE 0.33
+#define MUTATOR_CUTOFF_RATE 0.2
 
 using namespace std;
 
@@ -114,9 +114,6 @@ public:
 	int cost_spread;
 	int gain_depth;
 	int cost_depth;
-	float cost_weighted;
-	float gain_weighted;
-	float nett_weighted;
 	bool repeat;
 	bool freeloader = false;
 	bool mutator = false;
@@ -181,8 +178,9 @@ class Spell : public Action
 public:
 	bool avail;
 	bool repeat;
-	int absolute_gain;
-	int absolute_cost;
+	float cost_weighted;
+	float gain_weighted;
+	float nett_weighted;
 	bool disable_recursion = false;
 
 	Spell() {}
@@ -224,12 +222,12 @@ public:
 	Inventory inv;
 	map<int, Spell> spells;
 	vector<int> log;
-	bool exit = false;
+	Recipe recipe;
 
-	Simulation(vector<int> missing, Inventory inv, map<int, Spell> spells)
-		: Stones(missing), inv(inv), spells(spells) {}
+	Simulation(vector<int> missing, Inventory inv, map<int, Spell> spells, Recipe recipe)
+		: Stones(missing), inv(inv), spells(spells), recipe(recipe) {}
 
-	bool stonesMissing()
+	virtual bool simulationStonesMissing()
 	{
 		for (int i = 0; i < 4; i++)
 		{
@@ -238,63 +236,65 @@ public:
 		}
 		return false;
 	}
+
+	virtual void updateSimulationMissing()
+	{
+		vector<int> new_missing = recipe.getMissingStones(inv);
+		for (int i = 0; i < 4; i++)
+			stones[i] = new_missing[i];
+	}
+
+	virtual void updateSimulationInventory(int spell_id)
+	{
+		inv.slots_filled = 0;
+
+		for (int i = 0; i < 4; i++)
+		{
+			(spells[spell_id].stones[i] <= 0) ? inv.stones[i] -= abs(spells[spell_id].stones[i]) : inv.stones[i] += spells[spell_id].stones[i];
+			inv.slots_filled += inv.stones[i];
+		}
+	}
+
+	virtual int getSimulationCleaningSpell()
+	{
+		vector<int> available_spells;
+		Inventory tmp;
+		int min_inventory = 10;
+		int cleaning_spell = -1;
+
+		for (auto &spell : spells)
+		{
+			if (spell.second.haveRequiredStones(inv) && !spell.second.willOverflowInventory(inv))
+				available_spells.push_back(spell.first);
+		}
+
+		for (auto spell_id : available_spells)
+		{
+			tmp = inv;
+			tmp.slots_filled = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				(spells[spell_id].stones[i] <= 0) ? tmp.stones[i] -= abs(spells[spell_id].stones[i]) : tmp.stones[i] += spells[spell_id].stones[i];
+				tmp.slots_filled += tmp.stones[i];
+			}
+
+			if (tmp.slots_filled < min_inventory)
+			{
+				min_inventory = tmp.slots_filled;
+				cleaning_spell = spell_id;
+			}
+		}
+
+		return cleaning_spell;
+	}
 };
 
 class GreedySim : public Simulation
 {
 public:
-	vector<int> log;
-	Recipe recipe;
-
 	GreedySim(Inventory inv, map<int, Spell> spells, Recipe recipe)
-		: Simulation(recipe.getMissingStones(inv), inv, spells), recipe(recipe)
-	{
-		// cerr << "simulation missing [";
-		// for (int i = 0; i < 4; i++)
-		// {
-		// 	cerr << stones[i];
-		// 	(i == 3) ? cerr << "]" << endl : cerr << ", ";
-		// }
-
-		// cerr << "recipe [";
-		// for (int i = 0; i < 4; i++)
-		// {
-		// 	cerr << recipe.stones[i];
-		// 	(i == 3) ? cerr << "]" << endl : cerr << ", ";
-		// }
-	}
-
-	void updateMissing()
-	{
-		vector<int> new_missing = recipe.getMissingStones(inv);
-		for (int i = 0; i < 4; i++)
-			stones[i] = new_missing[i];
-
-		// cerr << "simulation missing [";
-		// for (int i = 0; i < 4; i++)
-		// {
-		// 	cerr << stones[i];
-		// 	(i == 3) ? cerr << "]" << endl : cerr << ", ";
-		// }
-	}
-
-	void updateInv(int spell_id)
-	{
-		for (int i = 0; i < 4; i++)
-			(spells[spell_id].stones[i] <= 0) ? inv.stones[i] -= abs(spells[spell_id].stones[i]) : inv.stones[i] += spells[spell_id].stones[i];
-
-		inv.slots_filled = 0;
-		for (int i = 0; i < 4; i++)
-			inv.slots_filled += inv.stones[i];
-
-		// cerr << "simulation inventory [";
-		// for (int i = 0; i < 4; i++)
-		// {
-		// 	cerr << inv.stones[i];
-		// 	(i == 3) ? cerr << "]" : cerr << ", ";
-		// }
-		// cerr << " filled for [" << inv.slots_filled << "/10]" << endl;
-	}
+		: Simulation(recipe.getMissingStones(inv), inv, spells, recipe) {}
 
 	int getSimulationSpell(vector<int> missing)
 	{
@@ -302,23 +302,6 @@ public:
 		vector<int> productive_spells;
 		int gather_max = -1;
 		int ret = -1;
-
-		// cerr << "------------------------" << endl;
-		// for (auto spell : spells)
-		// {
-		// 	cerr << "spell " << spell.first << " [";
-		// 	for (int i = 0; i < 4; i++)
-		// 	{
-		// 		cerr << spell.second.stones[i];
-		// 		(i == 3) ? cerr << "]" : cerr << ", ";
-		// 	}
-		// 	cerr << " and is ";
-		// 	if (!spell.second.avail)
-		// 		cerr << "not ";
-		// 	cerr << "available" << endl;
-		// 	cerr << "recursion is " << spell.second.disable_recursion << endl;
-		// }
-		// cerr << "------------------------" << endl;
 
 		for (auto spell : spells)
 		{
@@ -348,8 +331,13 @@ public:
 					gathered = (spells[spell_id].stones[i] > missing[i]) ? gathered + missing[i] : gathered + spells[spell_id].stones[i];
 			}
 
-			if (gathered > gather_max)
+			if (gathered >= gather_max)
 			{
+				if (ret != -1 && gathered == gather_max)
+				{
+					if (spells[spell_id].cost_weighted > spells[ret].cost_weighted)
+						continue;
+				}
 				gather_max = gathered;
 				ret = spell_id;
 			}
@@ -362,17 +350,11 @@ public:
 	{
 		int spell_id = getSimulationSpell(action.getMissingStones(inv));
 
-		// cerr << "at recursion level " << Recursion::getLevel() << " spell is " << spell_id << endl;
-
 		if (spell_id < 0)
-		{
-			exit = true;
-			return;
-		}
+			spell_id = getSimulationCleaningSpell();
 
 		if (!spells[spell_id].avail)
 		{
-			// cerr << "simulation rests at step " << log.size() << endl;
 			restoreSpellAvailability(spells);
 			log.push_back(-1);
 			return;
@@ -380,32 +362,25 @@ public:
 
 		if (spells[spell_id].haveRequiredStones(inv))
 		{
-			// cerr << "simulation casts spell " << spell_id << " at step " << log.size() << endl;
 			log.push_back(spell_id);
 			spells[spell_id].avail = false;
-			updateInv(spell_id);
-			updateMissing();
+			updateSimulationInventory(spell_id);
+			updateSimulationMissing();
 			return;
 		}
 
 		spells[spell_id].disable_recursion = true;
-		// Recursion::incLevel();
-		// cerr << "entering recursion level " << Recursion::getLevel() << endl;
 		simulateAcquiringStones(spells[spell_id]);
 		return;
 	}
 
-	int simulate()
+	int getSimulationSteps()
 	{
-		while (stonesMissing())
+		while (simulationStonesMissing())
 		{
-			// Recursion::setLevel(0);
 			restoreSpellRecursion(spells);
 			simulateAcquiringStones(recipe);
-			if (exit)
-				return INT16_MAX;
 		}
-
 		return log.size();
 	}
 };
@@ -416,7 +391,41 @@ map<int, Spell> g_spells;
 Inventory g_inv;
 vector<float> g_creation_rates(4, 0);
 
-////////////////////////////////////// SPELL CASTING //////////////////////////////////////
+////////////////////////////////////// SPELL MECHANICS //////////////////////////////////////
+
+int getCleaningSpell()
+{
+	vector<int> available_spells;
+	Inventory tmp;
+	int min_inventory = 10;
+	int cleaning_spell = -1;
+
+	for (auto &spell : g_spells)
+	{
+		if (spell.second.haveRequiredStones(g_inv) && !spell.second.willOverflowInventory(g_inv))
+			available_spells.push_back(spell.first);
+	}
+
+	for (auto spell_id : available_spells)
+	{
+		tmp = g_inv;
+		tmp.slots_filled = 0;
+
+		for (int i = 0; i < 4; i++)
+		{
+			(g_spells[spell_id].stones[i] <= 0) ? tmp.stones[i] -= abs(g_spells[spell_id].stones[i]) : tmp.stones[i] += g_spells[spell_id].stones[i];
+			tmp.slots_filled += tmp.stones[i];
+		}
+
+		if (tmp.slots_filled < min_inventory)
+		{
+			min_inventory = tmp.slots_filled;
+			cleaning_spell = spell_id;
+		}
+	}
+
+	return cleaning_spell;
+}
 
 int getSpell(vector<int> missing)
 {
@@ -453,8 +462,13 @@ int getSpell(vector<int> missing)
 				gathered = (g_spells[spell_id].stones[i] > missing[i]) ? gathered + missing[i] : gathered + g_spells[spell_id].stones[i];
 		}
 
-		if (gathered > gather_max)
+		if (gathered >= gather_max)
 		{
+			if (ret != -1 && gathered == gather_max)
+			{
+				if (g_spells[spell_id].cost_weighted > g_spells[ret].cost_weighted)
+					continue;
+			}
 			gather_max = gathered;
 			ret = spell_id;
 		}
@@ -466,6 +480,9 @@ template <typename T>
 void getRequiredStones(T action)
 {
 	int spell_id = getSpell(action.getMissingStones(g_inv));
+
+	if (spell_id < 0)
+		spell_id = getCleaningSpell();
 
 	if (!g_spells[spell_id].avail)
 	{
@@ -484,6 +501,30 @@ void getRequiredStones(T action)
 	return;
 }
 
+////////////////////////////////////// SPELL RATES ///////////////////////////////////
+
+void setWeights(Spell &spell)
+{
+	spell.cost_weighted = 0;
+	spell.gain_weighted = 0;
+	spell.nett_weighted = 0;
+
+	for (int i = 0; i < 4; i++)
+	{
+		if (spell.stones[i] > 0)
+			spell.gain_weighted += spell.stones[i] * g_creation_rates[i];
+		if (spell.stones[i] < 0)
+			spell.cost_weighted += abs(spell.stones[i]) * g_creation_rates[i];
+	}
+	spell.nett_weighted = spell.gain_weighted - spell.cost_weighted;
+}
+
+void computeSpellRates()
+{
+	for (auto &spell : g_spells)
+		setWeights(spell.second);
+}
+
 ////////////////////////////////////// CREATION RATE ///////////////////////////////////
 
 int simulateCreationSteps(int blue, int green, int orange, int yellow, map<int, Spell> input_spells)
@@ -494,7 +535,7 @@ int simulateCreationSteps(int blue, int green, int orange, int yellow, map<int, 
 	restoreSpellAvailability(sim_spells);
 
 	GreedySim greedy_sim(sim_inv, sim_spells, sim_recipe);
-	return greedy_sim.simulate();
+	return greedy_sim.getSimulationSteps();
 }
 
 float getCreationRate(int tier, map<int, Spell> sim_spells = g_spells)
@@ -506,35 +547,35 @@ float getCreationRate(int tier, map<int, Spell> sim_spells = g_spells)
 	{
 		for (int i = 0; i < CREATION_SIMULATION_DEPTH; i++, delta--)
 			efficiency += (float)simulateCreationSteps(delta, 0, 0, 0, sim_spells) / abs(delta);
-		return efficiency / 3.0;
+		return efficiency / CREATION_SIMULATION_DEPTH;
 	}
 	else if (tier == 1)
 	{
 		for (int i = 0; i < CREATION_SIMULATION_DEPTH; i++, delta--)
 			efficiency += (float)simulateCreationSteps(0, delta, 0, 0, sim_spells) / abs(delta);
-		return efficiency / 3.0;
+		return efficiency / CREATION_SIMULATION_DEPTH;
 	}
 	else if (tier == 2)
 	{
 		for (int i = 0; i < CREATION_SIMULATION_DEPTH; i++, delta--)
 			efficiency += (float)simulateCreationSteps(0, 0, delta, 0, sim_spells) / abs(delta);
-		return efficiency / 3.0;
+		return efficiency / CREATION_SIMULATION_DEPTH;
 	}
 	else
 	{
 		for (int i = 0; i < CREATION_SIMULATION_DEPTH; i++, delta--)
 			efficiency += (float)simulateCreationSteps(0, 0, 0, delta, sim_spells) / abs(delta);
-		return efficiency / 3.0;
+		return efficiency / CREATION_SIMULATION_DEPTH;
 	}
 }
 
-void computeCreationRate()
+void computeCreationRates()
 {
 	for (int i = 0; i < 4; i++)
 		g_creation_rates[i] = getCreationRate(i);
 }
 
-////////////////////////////////////// TOME MECHANICS ///////////////////////////////////
+////////////////////////////////////// TOME RATES ///////////////////////////////////
 
 float computeMutatorRate(Tome mutator)
 {
@@ -542,39 +583,23 @@ float computeMutatorRate(Tome mutator)
 	map<int, Spell> tmp_spells(g_spells);
 	tmp_spells.insert({1000, Spell(mutator, true, mutator.repeat)});
 
-	return (g_creation_rates[color] - getCreationRate(color, tmp_spells)) / g_creation_rates[color];
-}
-
-void setWeights(Tome &tome)
-{
-	tome.cost_weighted = 0;
-	tome.gain_weighted = 0;
-	tome.nett_weighted = 0;
-
-	for (int i = 0; i < 4; i++)
-	{
-		if (tome.stones[i] > 0)
-			tome.gain_weighted += tome.stones[i] * g_creation_rates[i];
-		if (tome.stones[i] < 0)
-			tome.cost_weighted += abs(tome.stones[i]) * g_creation_rates[i];
-	}
-	tome.nett_weighted = tome.gain_weighted - tome.cost_weighted;
+	return g_creation_rates[color] - getCreationRate(color, tmp_spells);
 }
 
 void computeTomeRates()
 {
 	for (auto &tome : g_tomes)
 	{
-		setWeights(tome.second);
 		if (tome.second.mutator)
 			tome.second.mutator_rate = computeMutatorRate(tome.second);
 	}
 }
 
+////////////////////////////////////// TOME MECHANICS ///////////////////////////////////
+
 int getOptimalMutator()
 {
 	float highest_rate = 0;
-	float cutoff_rate = 0;
 	vector<int> tmp_tomes;
 	int ret = 0;
 
@@ -599,7 +624,7 @@ int getOptimalMutator()
 
 int getOptimalFreeloader()
 {
-	float highest_gain = 0;
+	int color_max = 0;
 	vector<int> tmp_tomes;
 	int ret = 0;
 
@@ -608,14 +633,24 @@ int getOptimalFreeloader()
 		if (tome.second.freeloader)
 			tmp_tomes.push_back(tome.first);
 	}
+
 	for (auto i : tmp_tomes)
 	{
-		if (g_tomes[i].nett_weighted > highest_gain)
+		int highest_color = 0;
+
+		for (int i = 0; i < 4; i++)
+		{
+			if (g_tomes[i].stones[i] > 0)
+				highest_color = i;
+		}
+
+		if (highest_color > color_max)
 		{
 			ret = i;
-			highest_gain = g_tomes[i].nett_weighted;
+			color_max = highest_color;
 		}
 	}
+
 	return ret;
 }
 
@@ -671,7 +706,7 @@ int simulateRecipeSteps(int id)
 	restoreSpellAvailability(sim_spells);
 	GreedySim sim(sim_inv, sim_spells, g_recipes[id]);
 
-	return sim.simulate();
+	return sim.getSimulationSteps();
 }
 
 void computeRecipeRates()
@@ -783,8 +818,8 @@ void printTomes()
 		if (tome.second.freeloader)
 			cerr << " - freeloader";
 		else if (tome.second.mutator)
-			cerr << " - mutator - rate " << tome.second.mutator_rate;
-		cerr << " - nett_weight - " << tome.second.nett_weighted << endl;
+			cerr << " - mutator rate " << tome.second.mutator_rate;
+		cerr << endl;
 	}
 }
 
@@ -799,7 +834,7 @@ void printRecipes()
 			cerr << recipe.second.stones[i];
 			(i == 3) ? cerr << "]" : cerr << ", ";
 		}
-		cerr << " with rate " << recipe.second.rate << " for " << recipe.second.price << " rupees" << endl;
+		cerr << " - rate " << recipe.second.rate << " - " << recipe.second.price << " rupees" << endl;
 	}
 }
 
@@ -819,7 +854,7 @@ void printData()
 {
 	printStones();
 	printTomes();
-	//printRecipes();
+	printRecipes();
 	// printSpells();
 	// printInventory();
 }
@@ -884,13 +919,22 @@ void processInput()
 
 	processActions();
 	processInventory();
-	computeCreationRate();
+	computeCreationRates();
+	computeSpellRates();
 	computeTomeRates();
 	computeRecipeRates();
 }
 
+// placeholder values for first cycle
+void initializeCreationRates()
+{
+	for (int i = 0; i < 54; i++)
+		g_creation_rates[i] = i + 1;
+}
+
 int main()
 {
+	initializeCreationRates();
 	while (true)
 	{
 		processInput();
