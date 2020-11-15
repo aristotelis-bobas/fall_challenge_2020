@@ -3,9 +3,12 @@
 #include <map>
 #include <vector>
 
-#define MUT_COST_SPREAD 1
-#define MUT_GAIN_SPREAD 1
-#define MUT_COST_DEPTH 3
+#define CREATION_SIMULATION_DEPTH 3
+#define PRICE_WEIGHT 3
+#define MUTATOR_COST_SPREAD 1
+#define MUTATOR_GAIN_SPREAD 1
+#define MUTATOR_COST_DEPTH 3
+#define MUTATOR_CUTOFF_RATE 0.33
 
 using namespace std;
 
@@ -87,6 +90,7 @@ class Recipe : public Action
 public:
 	int price;
 	int spread;
+	float rate = 0;
 
 	Recipe() {}
 	Recipe(int blue, int green, int orange, int yellow, int price)
@@ -101,16 +105,92 @@ public:
 	}
 };
 
+class Tome : public Action
+{
+public:
+	int tax_cost;
+	int tax_gain;
+	int gain_spread;
+	int cost_spread;
+	int gain_depth;
+	int cost_depth;
+	float cost_weighted;
+	float gain_weighted;
+	float nett_weighted;
+	bool repeat;
+	bool freeloader = false;
+	bool mutator = false;
+	int mutator_focus;
+	float mutator_rate;
+
+	Tome() {}
+	Tome(int blue, int green, int orange, int yellow, int tax_cost, int tax_gain, bool repeat)
+		: Action(blue, green, orange, yellow), tax_cost(tax_cost), tax_gain(tax_gain), repeat(repeat)
+	{
+		gain_spread = 0;
+		cost_spread = 0;
+		cost_depth = 0;
+		gain_depth = 0;
+
+		for (int i = 0; i < 4; i++)
+		{
+			if (stones[i] > 0)
+			{
+				gain_spread++;
+				gain_depth += stones[i];
+			}
+			if (stones[i] < 0)
+			{
+				cost_spread++;
+				cost_depth += abs(stones[i]);
+			}
+		}
+
+		if (cost_spread == 0)
+			freeloader = true;
+
+		if (cost_spread <= MUTATOR_COST_SPREAD && gain_spread <= MUTATOR_GAIN_SPREAD && cost_depth <= MUTATOR_COST_DEPTH)
+		{
+			mutator = true;
+			for (int i = 0; i < 4; i++)
+			{
+				if (stones[i] > 0)
+					mutator_focus = i;
+			}
+		}
+	}
+
+	vector<int> getMissingStones(Inventory &inv)
+	{
+		vector<int> missing(4, 0);
+
+		missing[0] = (inv.stones[0] < tax_cost) ? tax_cost - inv.stones[0] : 0;
+		return missing;
+	}
+
+	bool haveRequiredStones(Inventory &inv)
+	{
+		if (inv.stones[0] < tax_cost)
+			return false;
+		return true;
+	}
+};
+
 class Spell : public Action
 {
 public:
 	bool avail;
 	bool repeat;
+	int absolute_gain;
+	int absolute_cost;
 	bool disable_recursion = false;
 
 	Spell() {}
 	Spell(int blue, int green, int orange, int yellow, bool avail, bool repeat)
 		: Action(blue, green, orange, yellow), avail(avail), repeat(repeat) {}
+
+	Spell(Tome tome, bool avail, bool repeat)
+		: Action(tome.stones[0], tome.stones[1], tome.stones[2], tome.stones[3]), avail(avail), repeat(repeat) {}
 
 	bool willOverflowInventory(Inventory inv)
 	{
@@ -138,71 +218,13 @@ void restoreSpellRecursion(map<int, Spell> &spells)
 		spell.second.disable_recursion = false;
 }
 
-class Tome : public Action
-{
-public:
-	int tax_cost;
-	int tax_gain;
-	int cost_spread;
-	int gain_spread;
-	int cost_depth;
-	int gain_depth;
-
-	bool freeloader = false;
-	bool mutator = false;
-
-	Tome() {}
-	Tome(int blue, int green, int orange, int yellow, int tax_cost, int tax_gain)
-		: Action(blue, green, orange, yellow), tax_cost(tax_cost), tax_gain(tax_gain)
-	{
-		gain_spread = 0;
-		cost_spread = 0;
-		cost_depth = 0;
-		gain_depth = 0;
-
-		for (int i = 0; i < 4; i++)
-		{
-			if (stones[i] > 0)
-			{
-				gain_spread++;
-				gain_depth += stones[i];
-			}
-			if (stones[i] < 0)
-			{
-				cost_spread++;
-				cost_depth += abs(stones[i]);
-			}
-		}
-
-		if (cost_spread == 0)
-			freeloader = true;
-
-		if (cost_spread <= MUT_COST_SPREAD && gain_spread <= MUT_GAIN_SPREAD && cost_depth <= MUT_COST_DEPTH)
-			mutator = true;
-	}
-
-	vector<int> getMissingStones(Inventory &inv)
-	{
-		vector<int> missing(4, 0);
-
-		missing[0] = (inv.stones[0] < tax_cost) ? tax_cost - inv.stones[0] : 0;
-		return missing;
-	}
-
-	bool haveRequiredStones(Inventory &inv)
-	{
-		if (inv.stones[0] < tax_cost)
-			return false;
-		return true;
-	}
-};
-
 class Simulation : public Stones
 {
 public:
 	Inventory inv;
 	map<int, Spell> spells;
 	vector<int> log;
+	bool exit = false;
 
 	Simulation(vector<int> missing, Inventory inv, map<int, Spell> spells)
 		: Stones(missing), inv(inv), spells(spells) {}
@@ -342,6 +364,12 @@ public:
 
 		// cerr << "at recursion level " << Recursion::getLevel() << " spell is " << spell_id << endl;
 
+		if (spell_id < 0)
+		{
+			exit = true;
+			return;
+		}
+
 		if (!spells[spell_id].avail)
 		{
 			// cerr << "simulation rests at step " << log.size() << endl;
@@ -374,6 +402,8 @@ public:
 			// Recursion::setLevel(0);
 			restoreSpellRecursion(spells);
 			simulateAcquiringStones(recipe);
+			if (exit)
+				return INT16_MAX;
 		}
 
 		return log.size();
@@ -384,9 +414,9 @@ map<int, Recipe> g_recipes;
 map<int, Tome> g_tomes;
 map<int, Spell> g_spells;
 Inventory g_inv;
+vector<float> g_creation_rates(4, 0);
 
-
-////////////////////////////////////// RESOURCE MECHANICS //////////////////////////////////////
+////////////////////////////////////// SPELL CASTING //////////////////////////////////////
 
 int getSpell(vector<int> missing)
 {
@@ -454,9 +484,9 @@ void getRequiredStones(T action)
 	return;
 }
 
-////////////////////////////////////// RESOURCE VALUATION ///////////////////////////////////
+////////////////////////////////////// CREATION RATE ///////////////////////////////////
 
-int simulateStoneSteps(int blue, int green, int orange, int yellow, map<int, Spell> input_spells)
+int simulateCreationSteps(int blue, int green, int orange, int yellow, map<int, Spell> input_spells)
 {
 	Inventory sim_inv(0, 0, 0, 0, 0);
 	Recipe sim_recipe(blue, green, orange, yellow, 0);
@@ -467,59 +497,213 @@ int simulateStoneSteps(int blue, int green, int orange, int yellow, map<int, Spe
 	return greedy_sim.simulate();
 }
 
-float getCreationEfficiency(int tier, map<int, Spell> sim_spells = g_spells)
+float getCreationRate(int tier, map<int, Spell> sim_spells = g_spells)
 {
+	int delta = -1;
+	float efficiency = 0;
+
 	if (tier == 0)
-		return 1.0 / simulateStoneSteps(-2, 0, 0, 0, sim_spells);
+	{
+		for (int i = 0; i < CREATION_SIMULATION_DEPTH; i++, delta--)
+			efficiency += (float)simulateCreationSteps(delta, 0, 0, 0, sim_spells) / abs(delta);
+		return efficiency / 3.0;
+	}
 	else if (tier == 1)
-		return 1.0 / simulateStoneSteps(0, -2, 0, 0, sim_spells);
+	{
+		for (int i = 0; i < CREATION_SIMULATION_DEPTH; i++, delta--)
+			efficiency += (float)simulateCreationSteps(0, delta, 0, 0, sim_spells) / abs(delta);
+		return efficiency / 3.0;
+	}
 	else if (tier == 2)
-		return 1.0 / simulateStoneSteps(0, 0, -2, 0, sim_spells);
+	{
+		for (int i = 0; i < CREATION_SIMULATION_DEPTH; i++, delta--)
+			efficiency += (float)simulateCreationSteps(0, 0, delta, 0, sim_spells) / abs(delta);
+		return efficiency / 3.0;
+	}
 	else
-		return 1.0 / simulateStoneSteps(0, 0, 0, -2, sim_spells);
+	{
+		for (int i = 0; i < CREATION_SIMULATION_DEPTH; i++, delta--)
+			efficiency += (float)simulateCreationSteps(0, 0, 0, delta, sim_spells) / abs(delta);
+		return efficiency / 3.0;
+	}
+}
+
+void computeCreationRate()
+{
+	for (int i = 0; i < 4; i++)
+		g_creation_rates[i] = getCreationRate(i);
 }
 
 ////////////////////////////////////// TOME MECHANICS ///////////////////////////////////
 
-void getSpellFromTome(int id)
+float computeMutatorRate(Tome mutator)
 {
-	if (g_tomes[id].haveRequiredStones(g_inv))
-		cout << "LEARN " << id << endl;
-	else
+	int color = mutator.mutator_focus;
+	map<int, Spell> tmp_spells(g_spells);
+	tmp_spells.insert({1000, Spell(mutator, true, mutator.repeat)});
+
+	return (g_creation_rates[color] - getCreationRate(color, tmp_spells)) / g_creation_rates[color];
+}
+
+void setWeights(Tome &tome)
+{
+	tome.cost_weighted = 0;
+	tome.gain_weighted = 0;
+	tome.nett_weighted = 0;
+
+	for (int i = 0; i < 4; i++)
 	{
-		cerr << "not enough stones to learn tome " << id << endl;
-		getRequiredStones(g_tomes[id]);
+		if (tome.stones[i] > 0)
+			tome.gain_weighted += tome.stones[i] * g_creation_rates[i];
+		if (tome.stones[i] < 0)
+			tome.cost_weighted += abs(tome.stones[i]) * g_creation_rates[i];
+	}
+	tome.nett_weighted = tome.gain_weighted - tome.cost_weighted;
+}
+
+void computeTomeRates()
+{
+	for (auto &tome : g_tomes)
+	{
+		setWeights(tome.second);
+		if (tome.second.mutator)
+			tome.second.mutator_rate = computeMutatorRate(tome.second);
 	}
 }
 
-////////////////////////////////////// RECIPE ALGORITHM //////////////////////////////////////
+int getOptimalMutator()
+{
+	float highest_rate = 0;
+	float cutoff_rate = 0;
+	vector<int> tmp_tomes;
+	int ret = 0;
+
+	for (auto tome : g_tomes)
+	{
+		if (tome.second.mutator)
+		{
+			if (tome.second.mutator_rate >= MUTATOR_CUTOFF_RATE)
+				tmp_tomes.push_back(tome.first);
+		}
+	}
+	for (auto i : tmp_tomes)
+	{
+		if (g_tomes[i].mutator_rate > highest_rate)
+		{
+			ret = i;
+			highest_rate = g_tomes[i].mutator_rate;
+		}
+	}
+	return ret;
+}
+
+int getOptimalFreeloader()
+{
+	float highest_gain = 0;
+	vector<int> tmp_tomes;
+	int ret = 0;
+
+	for (auto tome : g_tomes)
+	{
+		if (tome.second.freeloader)
+			tmp_tomes.push_back(tome.first);
+	}
+	for (auto i : tmp_tomes)
+	{
+		if (g_tomes[i].nett_weighted > highest_gain)
+		{
+			ret = i;
+			highest_gain = g_tomes[i].nett_weighted;
+		}
+	}
+	return ret;
+}
+
+bool freeloaderAvailable()
+{
+	for (auto tome : g_tomes)
+	{
+		if (tome.second.freeloader)
+			return true;
+	}
+	return false;
+}
+
+bool mutatorAvailable()
+{
+	float cutoff_rate = 0;
+
+	for (auto tome : g_tomes)
+	{
+		if (tome.second.mutator)
+		{
+			if (tome.second.mutator_rate >= MUTATOR_CUTOFF_RATE)
+				return true;
+		}
+	}
+	return false;
+}
+
+int getOptimalTome()
+{
+	if (freeloaderAvailable())
+		return getOptimalFreeloader();
+	else if (mutatorAvailable())
+		return getOptimalMutator();
+	else
+		return -1;
+}
+
+bool tomeAvailable()
+{
+	if (freeloaderAvailable() || mutatorAvailable())
+		return true;
+	return false;
+}
+
+////////////////////////////////////// RECIPE MECHANICS //////////////////////////////////////
 
 int simulateRecipeSteps(int id)
 {
-	int greedy_steps = 0;
-	GreedySim greedy_sim(g_inv, g_spells, g_recipes[id]);
+	Inventory sim_inv(0, 0, 0, 0, 0);
+	map<int, Spell> sim_spells(g_spells);
 
-	greedy_steps = greedy_sim.simulate();
-	cerr << "[GreedySim] recipe " << id << " -- " << greedy_steps << " steps -- " << g_recipes[id].price / (float)greedy_steps << " efficiency " << endl;
-	return greedy_steps;
+	restoreSpellAvailability(sim_spells);
+	GreedySim sim(sim_inv, sim_spells, g_recipes[id]);
+
+	return sim.simulate();
+}
+
+void computeRecipeRates()
+{
+	int id;
+	int steps;
+
+	for (auto &recipe : g_recipes)
+	{
+		id = recipe.first;
+		steps = simulateRecipeSteps(id);
+		recipe.second.rate = (PRICE_WEIGHT * g_recipes[id].price) / (float)steps;
+		//cerr << "[GreedySim] recipe " << id << " -- " << steps << " steps -- " << recipe.second.price << " price -- " << recipe.second.rate << " rate " << endl;
+	}
 }
 
 int getOptimalRecipe()
 {
 	float max = 0;
 	int ret;
-	int id;
-	int computed;
 
-	for (auto &recipe : g_recipes)
+	for (auto recipe : g_recipes)
 	{
-		id = recipe.first;
-		computed = simulateRecipeSteps(id);
-
-		if ((g_recipes[id].price / (float)computed) > max)
+		if (recipe.second.rate >= max)
 		{
-			max = g_recipes[id].price / (float)computed;
-			ret = id;
+			if (recipe.second.rate == max)
+			{
+				if (recipe.second.price < g_recipes[ret].price)
+					continue;
+			}
+			max = recipe.second.rate;
+			ret = recipe.first;
 		}
 	}
 	return ret;
@@ -529,10 +713,18 @@ int getOptimalRecipe()
 
 void computeOutput()
 {
-	if (false)
+	if (tomeAvailable())
 	{
-		// TOME SHIT
-		return;
+		int tome_id = getOptimalTome();
+		cerr << "focusing on learning tome " << tome_id << endl;
+
+		if (g_tomes[tome_id].haveRequiredStones(g_inv))
+			cout << "LEARN " << tome_id << endl;
+		else
+		{
+			cerr << "not enough stones to learn tome " << tome_id << endl;
+			getRequiredStones(g_tomes[tome_id]);
+		}
 	}
 
 	else
@@ -550,16 +742,15 @@ void computeOutput()
 	}
 }
 
-
 //////////////////////////////////////////////// DEBUG ///////////////////////////////////
 
 void printStones()
 {
-	cerr << "-------------STONE CREATION-------------" << endl;
+	cerr << "-------------CREATION-------------" << endl;
 	cerr << "creation efficiency [";
 	for (int i = 0; i < 4; i++)
 	{
-		cerr << getCreationEfficiency(i);
+		cerr << g_creation_rates[i];
 		(i == 3) ? cerr << "]" << endl : cerr << ", ";
 	}
 }
@@ -589,7 +780,11 @@ void printTomes()
 			cerr << tome.second.stones[i];
 			(i == 3) ? cerr << "]" : cerr << ", ";
 		}
-		cerr << " for " << tome.second.tax_cost << " blue stones" << endl;
+		if (tome.second.freeloader)
+			cerr << " - freeloader";
+		else if (tome.second.mutator)
+			cerr << " - mutator - rate " << tome.second.mutator_rate;
+		cerr << " - nett_weight - " << tome.second.nett_weighted << endl;
 	}
 }
 
@@ -604,7 +799,7 @@ void printRecipes()
 			cerr << recipe.second.stones[i];
 			(i == 3) ? cerr << "]" : cerr << ", ";
 		}
-		cerr << " for " << recipe.second.price << " rupees" << endl;
+		cerr << " with rate " << recipe.second.rate << " for " << recipe.second.price << " rupees" << endl;
 	}
 }
 
@@ -623,8 +818,8 @@ void printInventory()
 void printData()
 {
 	printStones();
-	// printTomes();
-	// printRecipes();
+	printTomes();
+	//printRecipes();
 	// printSpells();
 	// printInventory();
 }
@@ -659,7 +854,7 @@ void processActions()
 		else if (type == "CAST")
 			g_spells.insert({id, Spell(blue, green, orange, yellow, castable, repeatable)});
 		else if (type == "LEARN")
-			g_tomes.insert({id, Tome(blue, green, orange, yellow, tome_index, tax_count)});
+			g_tomes.insert({id, Tome(blue, green, orange, yellow, tome_index, tax_count, repeatable)});
 	}
 }
 
@@ -689,6 +884,9 @@ void processInput()
 
 	processActions();
 	processInventory();
+	computeCreationRate();
+	computeTomeRates();
+	computeRecipeRates();
 }
 
 int main()
@@ -696,83 +894,7 @@ int main()
 	while (true)
 	{
 		processInput();
-		computeOutput();
 		printData();
+		computeOutput();
 	}
-}
-
-////////////////////////////////////////////////////////==========OLD=================////////////////////////////////////////////////////////////////////////////////////////////
-
-bool hasFreeloader()
-{
-	for (auto tome : g_tomes)
-	{
-		if (tome.second.freeloader)
-			return true;
-	}
-	return false;
-}
-
-bool hasMutator()
-{
-	for (auto tome : g_tomes)
-	{
-		if (tome.second.mutator)
-			return true;
-	}
-	return false;
-}
-
-int getOptimalFreeloader()
-{
-	vector<int> tmp_tomes;
-	int ret = 0;
-	int highest_spread = 0;
-
-	for (auto tome : g_tomes)
-	{
-		if (tome.second.freeloader)
-			tmp_tomes.push_back(tome.first);
-	}
-	for (auto id : tmp_tomes)
-	{
-		if (g_tomes[id].gain_spread > highest_spread)
-		{
-			ret = id;
-			highest_spread = g_tomes[id].gain_spread;
-		}
-	}
-	return ret;
-}
-
-int getOptimalMutator()
-{
-	vector<int> tmp_tomes;
-	int ret = 0;
-	int max_gain = 0;
-
-	for (auto tome : g_tomes)
-	{
-		if (tome.second.mutator)
-			tmp_tomes.push_back(tome.first);
-	}
-	for (auto id : tmp_tomes)
-	{
-		if (g_tomes[id].gain_depth > max_gain)
-		{
-			ret = id;
-			max_gain = g_tomes[id].gain_depth;
-		}
-	}
-	return ret;
-}
-
-int getOptimalTome()
-{
-	if (hasFreeloader())
-		return getOptimalFreeloader();
-	else if (hasMutator())
-		return getOptimalMutator();
-	else
-		return -1;
 }
