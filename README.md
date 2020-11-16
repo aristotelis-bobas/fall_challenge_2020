@@ -25,7 +25,7 @@ I reached the limit of the first strategy and started working on a new strategy 
 Key flaws; <br>
 
 - The weight system based on simulation creation rate seems like an unnecessary abstraction, not sure yet what to do with this
-- Simulations follow same rules, still no full depth / breadth searching algorithm
+- Different simulations follow minor change in rules, still no full depth / breadth searching algorithm
 
 # day 5 - version 3
 
