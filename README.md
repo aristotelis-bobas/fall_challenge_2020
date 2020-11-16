@@ -22,6 +22,11 @@ Key flaws; <br>
 <p>
 I reached the limit of the first strategy and started working on a new strategy to optimize the decision making process. I needed more accuracy in terms of amount of turns needed for each action, whether it was buying a spell from the tomebook or brewing a potion. I wrote simulations with different internal rules. These simulations enabled me to get an accurate overview of the amounts of step needed for each action. I used these simulations to find the most efficient recipe in terms of reward divided by amount of steps, and also used these simulations to rewrite the weight distribution system to actually get a more accurate weighted value of the creation rate of each of the 4 different ingredients. </p>
 
+Key flaws; <br>
+
+- The weight system based on simulation creation rate seems like an unnecessary abstraction, not sure yet what to do with this
+- Simulations follow same rules, still no full depth / breadth searching algorithm
+
 # day 5 - version 3
 
 <p>
