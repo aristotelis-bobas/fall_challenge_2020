@@ -30,4 +30,4 @@ Key flaws; <br>
 # day 5 - version 3
 
 <p>
-The simulations in the previous version were pre-defined by my own set rules. In this version I left the rules out of the simulations and implemented a depth-first searching algorithm that recursively digs deeper into the spread of possibilities. </p>
+The simulations in the previous version were pre-defined by my own set rules. In this version I left the rules out of the simulations and implemented a depth-first searching algorithm that recursively digs deeper into the spread of possibilities. It logs its steps along the way and benchmarks its results against other searches and a known solution. </p>
