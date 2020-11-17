@@ -1,8 +1,22 @@
+
+#pragma GCC optimize("O3")
+#pragma GCC optimize("inline")
+#pragma GCC optimize("omit-frame-pointer")
+#pragma GCC optimize("unroll-loops") //Optimization flags
+#pragma GCC optimize("Ofast")
+#pragma GCC option("arch=native","tune=native","no-zero-upper") //Enable AVX
+#pragma GCC target("avx")  //Enable AVX
+#pragma GCC target "bmi2"
+
+#include <x86intrin.h> //AVX/SSE Extensions
 #include <iostream>
 #include <string>
 #include <map>
+#include <list>
 #include <vector>
 #include <cmath>
+
+#define SIMULATION_MAX_DEPTH 30
 
 #define RECIPE_PRICE_WEIGHT 2
 #define RECIPE_STEPS_WEIGHT 2
@@ -50,9 +64,12 @@ struct Inventory : public Stones
 class Action : public Stones
 {
 public:
+	string type;
+	int id;
+
 	Action() {}
-	Action(int blue, int green, int orange, int yellow)
-		: Stones(blue, green, orange, yellow) {}
+	Action(int blue, int green, int orange, int yellow, int id)
+		: Stones(blue, green, orange, yellow), id(id) {}
 
 	virtual vector<int> getMissingStones(Inventory &inv)
 	{
@@ -79,12 +96,16 @@ class Recipe : public Action
 {
 public:
 	int price;
-	int steps_needed = 0;
+	int steps = 0;
 	float rating = 0;
+	list<string> instructions;
 
 	Recipe() {}
-	Recipe(int blue, int green, int orange, int yellow, int price)
-		: Action(blue, green, orange, yellow), price(price) {}
+	Recipe(int blue, int green, int orange, int yellow, int id, int price)
+		: Action(blue, green, orange, yellow, id), price(price)
+	{
+		type = "recipe";
+	}
 };
 
 class Tome : public Action
@@ -101,8 +122,8 @@ public:
 	bool mutator = false;
 
 	Tome() {}
-	Tome(int blue, int green, int orange, int yellow, int tax_cost, int tax_gain, bool repeat)
-		: Action(blue, green, orange, yellow), tax_cost(tax_cost), tax_gain(tax_gain), repeat(repeat)
+	Tome(int blue, int green, int orange, int yellow, int id, int tax_cost, int tax_gain, bool repeat)
+		: Action(blue, green, orange, yellow, id), tax_cost(tax_cost), tax_gain(tax_gain), repeat(repeat)
 	{
 		gain_spread = 0;
 		cost_spread = 0;
@@ -128,6 +149,8 @@ public:
 
 		if (cost_spread <= MUTATOR_COST_SPREAD && gain_spread <= MUTATOR_GAIN_SPREAD && cost_depth <= MUTATOR_COST_DEPTH && repeat)
 			mutator = true;
+
+		type = "tome";
 	}
 
 	vector<int> getMissingStones(Inventory &inv)
@@ -157,11 +180,11 @@ public:
 	bool disable_simulation = false;
 
 	Spell() {}
-	Spell(int blue, int green, int orange, int yellow, bool avail, bool repeat)
-		: Action(blue, green, orange, yellow), avail(avail), repeat(repeat) {}
-
-	Spell(Tome tome, bool avail, bool repeat)
-		: Action(tome.stones[0], tome.stones[1], tome.stones[2], tome.stones[3]), avail(avail), repeat(repeat) {}
+	Spell(int blue, int green, int orange, int yellow, int id, bool avail, bool repeat)
+		: Action(blue, green, orange, yellow, id), avail(avail), repeat(repeat)
+	{
+		type = "spell";
+	}
 
 	bool willOverflowInventory(Inventory inv)
 	{
@@ -177,22 +200,31 @@ public:
 	}
 };
 
-////////////////////////////////////// SIMULATION  //////////////////////////////////////
+struct SimulationResult
+{
+	int id;
+	int repeat;
+	int size;
+	list<string> instructions;
 
-int getSpell(vector<int> missing, map<int, Spell> &spells, Inventory &inv);
-int getCleaningSpell(map<int, Spell> &spells, Inventory &inv);
+	SimulationResult(int id, int repeat, list<string> instructions)
+		: id(id), repeat(repeat), instructions(instructions), size(instructions.size()) {}
+};
+
+////////////////////////////////////// SIMULATION  //////////////////////////////////////
 
 class Simulation : public Stones
 {
 public:
 	Inventory inv;
 	map<int, Spell> spells;
-	vector<int> log;
+	list<string> log;
 	Action action;
+	int depth;
 	bool error = false;
 
-	Simulation(Inventory inv, map<int, Spell> spells, Action action)
-		: Stones(action.getMissingStones(inv)), inv(inv), spells(spells), action(action) {}
+	Simulation(Inventory inv, map<int, Spell> spells, Action action, list<string> log, int depth)
+		: Stones(action.getMissingStones(inv)), inv(inv), spells(spells), action(action), log(log), depth(depth) {}
 
 	static void restoreSpellAvailability(map<int, Spell> &spells)
 	{
@@ -214,7 +246,7 @@ public:
 			{
 				spell.second.repeat_flag = false;
 				for (int i = 0; i < 4; i++)
-					spell.second.stones[i] *= spell.second.repeat_value;
+					spell.second.stones[i] /= spell.second.repeat_value;
 				spell.second.repeat_value = 0;
 			}
 		}
@@ -238,29 +270,229 @@ public:
 		}
 	}
 
-	template <typename T>
-	void simulateAcquiringStones(T action)
+	int getCleaningSpell()
 	{
-		int spell_id = getSpell(action.getMissingStones(inv), spells, inv);
-		
+		vector<int> available_spells;
+		Inventory tmp;
+		int min_inventory = 10;
+		int cleaning_spell = -1;
+
+		for (auto &spell : spells)
+		{
+			if (spell.second.haveRequiredStones(inv) && !spell.second.willOverflowInventory(inv) && !spell.second.disable_recursion)
+				available_spells.push_back(spell.first);
+		}
+
+		for (auto spell_id : available_spells)
+		{
+			tmp = inv;
+			tmp.slots_filled = 0;
+
+			for (int i = 0; i < 4; i++)
+			{
+				(spells[spell_id].stones[i] <= 0) ? tmp.stones[i] -= abs(spells[spell_id].stones[i]) : tmp.stones[i] += spells[spell_id].stones[i];
+				tmp.slots_filled += tmp.stones[i];
+			}
+
+			if (tmp.slots_filled < min_inventory)
+			{
+				min_inventory = tmp.slots_filled;
+				cleaning_spell = spell_id;
+			}
+		}
+		return cleaning_spell;
+	}
+
+	int canRepeat(vector<int> missing, Spell spell)
+	{
+		int mult = 1;
+
+		for (int i = 0; i < 4; i++)
+		{
+			if (spell.stones[i] > 0 && missing[i] > 0)
+			{
+				if (spell.stones[i] < missing[i] && spell.repeat)
+				{
+					if (ceil((float)missing[i] / spell.stones[i]) > mult)
+						mult = ceil((float)missing[i] / spell.stones[i]);
+				}
+			}
+		}
+
+		while (mult > 1)
+		{
+			if (!Spell(spell.stones[0] * mult, spell.stones[1] * mult, spell.stones[2] * mult, spell.stones[3] * mult, spell.avail, spell.repeat, 999).willOverflowInventory(inv))
+				return mult;
+			mult--;
+		}
+
+		return 1;
+	}
+
+	void alterRepeatingSpell(int mult, Spell &spell)
+	{
+
+		for (int i = 0; i < 4; i++)
+			spell.stones[i] = spell.stones[i] * mult;
+
+		spell.repeat_flag = true;
+		spell.repeat_value = mult;
+	}
+
+	vector<int> getSimulationSpells(vector<int> missing)
+	{
+		vector<int> simulation_spells;
+
+		for (auto spell : spells)
+		{
+			if (!spell.second.disable_recursion && !spell.second.disable_simulation && !spell.second.willOverflowInventory(inv))
+			{
+				for (int i = 0; i < 4; i++)
+				{
+					if (spell.second.stones[i] > 0 && missing[i] > 0)
+					{
+						simulation_spells.push_back(spell.first);
+						break;
+					}
+				}
+			}
+		}
+		return simulation_spells;
+	}
+
+	vector<SimulationResult> getSimulationResults(vector<int> missing, vector<int> simulation_spells)
+	{
+		vector<SimulationResult> results;
+		list<string> tmp_log;
+
+		for (auto spell_id : simulation_spells)
+		{
+			int multi = canRepeat(missing, spells[spell_id]);
+
+			if (multi > 1)
+			{
+				while (multi > 1)
+				{
+					map<int, Spell> tmp_spells = spells;
+					alterRepeatingSpell(multi, tmp_spells[spell_id]);
+
+					if (tmp_spells[spell_id].haveRequiredStones(inv))
+						results.push_back(SimulationResult(spell_id, multi, log));
+					else
+					{
+						Simulation sim(inv, tmp_spells, tmp_spells[spell_id], log, depth + 1);
+						tmp_log = sim.getSimulationSteps();
+						results.push_back(SimulationResult(spell_id, multi, tmp_log));
+					}
+				}
+			}
+			else
+			{
+				if (spells[spell_id].haveRequiredStones(inv))
+					results.push_back(SimulationResult(spell_id, multi, log));
+				else
+				{
+					Simulation sim(inv, spells, spells[spell_id], log, depth + 1);
+					tmp_log = sim.getSimulationSteps();
+					results.push_back(SimulationResult(spell_id, multi, tmp_log));
+				}
+			}
+		}
+		return results;
+	}
+
+	int getSimulationSpell(vector<int> missing)
+	{
+		/// get spells that actually help gain missing ingredients and are not disabled (recursion / simulation / overflow)
+
+		vector<int> simulation_spells;
+		simulation_spells = getSimulationSpells(missing);
+
+		//// check whether if spells available for simulating
+
+		if (simulation_spells.size() == 1 && !spells[simulation_spells.front()].repeat)
+			return simulation_spells.front();
+
+		/// run simulations
+
+		vector<SimulationResult> results;
+		results = getSimulationResults(missing, simulation_spells);
+
+		/// filter simulation results that end in errors
+
+		vector<SimulationResult> filtered_results;
+
+		// cerr << "results: ";
+
+		for (auto result : results)
+		{
+			if (result.instructions.back() != "error")
+				filtered_results.push_back(result);
+
+			// cerr << "[id " << result.id << ", " << result.size << "], ";
+		}
+
+		// cerr << endl;
+
+		/// get return value (shortest simulation)
+
+		int min_steps = INT8_MAX;
+		int repeat_value = 0;
+		bool repeat = false;
+		int ret = -1;
+
+		for (auto result : filtered_results)
+		{
+			if (result.size < min_steps)
+			{
+				min_steps = result.size;
+				ret = result.id;
+
+				if (result.repeat > 1)
+				{
+					repeat = true;
+					repeat_value = result.repeat;
+				}
+				else
+					repeat = false;
+			}
+		}
+
+		if (repeat)
+			alterRepeatingSpell(repeat_value, spells[ret]);
+
+		return ret;
+	}
+
+	template <typename T>
+	void takeSimulationStep(T action)
+	{
+		int spell_id = getSimulationSpell(action.getMissingStones(inv));
+
 		if (spell_id < 0)
 		{
-			spell_id = getCleaningSpell(spells, inv);
+			// if no spell is found most probably the inventory is full, try to clean inventory
+			spell_id = getCleaningSpell();
+
+			// if still no spell found the simulation stops here
 			if (spell_id < 0)
 				error = true;
 			return;
 		}
 
-		if (!spells[spell_id].avail)
-		{
-			restoreSpellAvailability(spells);
-			log.push_back(-1);
-			return;
-		}
-
 		if (spells[spell_id].haveRequiredStones(inv))
 		{
-			log.push_back(spell_id);
+			if (!spells[spell_id].avail)
+			{
+				restoreSpellAvailability(spells);
+				log.push_back("REST");
+				return;
+			}
+
+			if (spells[spell_id].repeat_flag)
+				log.push_back("CAST " + to_string(spell_id) + " " + to_string(spells[spell_id].repeat_value));
+			else
+				log.push_back("CAST " + to_string(spell_id));
 			spells[spell_id].avail = false;
 			updateSimulationInventory(spell_id);
 			updateSimulationMissing();
@@ -268,20 +500,45 @@ public:
 		}
 
 		spells[spell_id].disable_recursion = true;
-		simulateAcquiringStones(spells[spell_id]);
+		takeSimulationStep(spells[spell_id]);
 		return;
 	}
 
-	int getSimulationSteps()
+	list<string> getSimulationSteps()
 	{
+		cerr << "entered simulation at depth " << depth << " for stones [";
+		for (int i = 0; i < 4; i++)
+		{
+			cerr << stones[i];
+			if (i != 3)
+				cerr << ", ";
+		}
+		cerr << "]" << endl;
+
+		if (depth > SIMULATION_MAX_DEPTH)
+		{
+			log.push_back("error");
+			return log;
+		}
+
 		while (!action.haveRequiredStones(inv) && !error)
 		{
 			restoreSpellRecursion();
-			simulateAcquiringStones(action);
+			restoreRepeatingSpells();
+			takeSimulationStep(action);
 			if (error)
-				return 42; // this will not be fatal, I hope
+			{
+				log.push_back("error");
+				return log;
+			}
 		}
-		return log.size();
+
+		cerr << "instructions at depth " << depth << " : ";
+		for (auto step : log)
+			cerr << step << ", ";
+		cerr << endl;
+
+		return log;
 	}
 };
 
@@ -293,186 +550,6 @@ map<int, Spell> g_spells;
 Inventory g_inv;
 int enemy_score;
 int potions_brewed = 0;
-
-////////////////////////////////////// SPELL MECHANICS //////////////////////////////////////
-
-int getFreeTome();
-
-int getCleaningSpell(map<int, Spell> &spells, Inventory &inv)
-{
-	vector<int> available_spells;
-	Inventory tmp;
-	int min_inventory = 10;
-	int cleaning_spell = -1;
-
-	for (auto &spell : spells)
-	{
-		if (spell.second.haveRequiredStones(inv) && !spell.second.willOverflowInventory(inv))
-			available_spells.push_back(spell.first);
-	}
-
-	for (auto spell_id : available_spells)
-	{
-		tmp = inv;
-		tmp.slots_filled = 0;
-
-		for (int i = 0; i < 4; i++)
-		{
-			(spells[spell_id].stones[i] <= 0) ? tmp.stones[i] -= abs(spells[spell_id].stones[i]) : tmp.stones[i] += spells[spell_id].stones[i];
-			tmp.slots_filled += tmp.stones[i];
-		}
-
-		if (tmp.slots_filled < min_inventory)
-		{
-			min_inventory = tmp.slots_filled;
-			cleaning_spell = spell_id;
-		}
-	}
-	return cleaning_spell;
-}
-
-bool canRepeat(vector<int> missing, Spell &spell, Inventory &inv)
-{
-	for (int i = 0; i < 4; i++)
-	{
-		if (spell.stones[i] > 0 && missing[i] > 0)
-		{
-			if (spell.stones[i] < missing[i] && spell.repeat)
-			{
-				Spell tmp(spell);
-
-				if (!Spell(tmp.stones[0] * 2, tmp.stones[1] * 2, tmp.stones[2] * 2, tmp.stones[3] * 2, tmp.avail, tmp.repeat).willOverflowInventory(inv))
-					return true;
-			}
-		}
-	}
-	return false;
-}
-
-void alterRepeatingSpell(vector<int> missing, Spell &spell, Inventory &inv)
-{
-	bool complete = false;
-	int repeat_count = 0;
-
-	for (int i = 0; i < 4; i++)
-	{
-		if (spell.stones[i] > 0 && missing[i] > 0)
-		{
-			if (ceil((float)missing[i] / spell.stones[i]) > repeat_count)
-				repeat_count = ceil((float)missing[i] / spell.stones[i]);
-		}
-	}
-
-	for (int mult = repeat_count; mult > 1; mult--)
-	{
-		if (!Spell(spell.stones[0] * mult, spell.stones[1] * mult, spell.stones[2] * mult, spell.stones[3] * mult, spell.avail, spell.repeat).willOverflowInventory(inv))
-		{
-			for (int i = 0; i < 4; i++)
-				spell.stones[i] = spell.stones[i] * mult;
-
-			spell.repeat_flag = true;
-			spell.repeat_value = mult;
-			return;
-		}
-	}
-}
-
-int getSpell(vector<int> missing, map<int, Spell> &spells, Inventory &inv)
-{
-	vector<int> eligible_spells;
-	vector<int> productive_spells;
-	int gather_max = -1;
-	int ret = -1;
-
-	for (auto spell : spells)
-	{
-		if (!spell.second.disable_recursion && !spell.second.disable_simulation && !spell.second.willOverflowInventory(inv))
-			eligible_spells.push_back(spell.first);
-	}
-
-	for (auto spell_id : eligible_spells)
-	{
-		for (int i = 0; i < 4; i++)
-		{
-			if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
-			{
-				productive_spells.push_back(spell_id);
-				break;
-			}
-		}
-	}
-
-	for (auto spell_id : productive_spells)
-	{
-		int gathered = 0;
-
-		if (canRepeat(missing, spells[spell_id], inv))
-			alterRepeatingSpell(missing, spells[spell_id], inv);
-
-		for (int i = 0; i < 4; i++)
-		{
-			if (spells[spell_id].stones[i] > 0 && missing[i] > 0)
-				gathered = (spells[spell_id].stones[i] > missing[i]) ? gathered + missing[i] : gathered + spells[spell_id].stones[i];
-		}
-
-		if (gathered >= gather_max)
-		{
-			if (ret != -1 && gathered == gather_max)
-			{
-				if (!spells[spell_id].haveRequiredStones(inv) && spells[ret].haveRequiredStones(inv))
-					continue;
-
-				spells[ret].disable_simulation = true;
-				int ret_steps = Simulation(inv, spells, spells[ret]).getSimulationSteps();
-				spells[ret].disable_simulation = false;
-
-				spells[spell_id].disable_simulation = true;
-				int spell_steps = Simulation(inv, spells, spells[spell_id]).getSimulationSteps();
-				spells[spell_id].disable_simulation = false;
-				if (spell_steps > ret_steps)
-					continue;
-			}
-			gather_max = gathered;
-			ret = spell_id;
-		}
-	}
-	return ret;
-}
-
-template <typename T>
-void getRequiredStones(T action)
-{
-	int spell_id = getSpell(action.getMissingStones(g_inv), g_spells, g_inv);
-
-	if (spell_id < 0)
-	{
-		spell_id = getCleaningSpell(g_spells, g_inv);
-		if (spell_id < 0)
-		{
-			cout << "LEARN " << getFreeTome() << endl;
-			return;
-		}
-	}
-
-	if (!g_spells[spell_id].avail)
-	{
-		cout << "REST" << endl;
-		return;
-	}
-
-	if (g_spells[spell_id].haveRequiredStones(g_inv))
-	{
-		if (g_spells[spell_id].repeat_flag)
-			cout << "CAST " << spell_id << " " << g_spells[spell_id].repeat_value << " DOUBLE SPANKINGS" << endl;
-		else
-			cout << "CAST " << spell_id << endl;
-		return;
-	}
-
-	g_spells[spell_id].disable_recursion = true;
-	getRequiredStones(g_spells[spell_id]);
-	return;
-}
 
 ////////////////////////////////////// TOME MECHANICS ///////////////////////////////////
 
@@ -608,14 +685,14 @@ void simulateRecipes()
 	{
 		int id = recipe.first;
 
-		//simulation based on empty inventory and non-exhausted spells //
-		Inventory sim_inv(0, 0, 0, 0, 0);
-		map<int, Spell> sim_spells(g_spells);
-		Simulation::restoreSpellAvailability(sim_spells);
+		Simulation sim(g_inv, g_spells, g_recipes[id], recipe.second.instructions, 0);
+		recipe.second.instructions = sim.getSimulationSteps();
+		recipe.second.steps = recipe.second.instructions.size();
 
-		steps = Simulation(sim_inv, sim_spells, g_recipes[id]).getSimulationSteps();
-		recipe.second.steps_needed = steps;
-		recipe.second.rating = pow(g_recipes[id].price, RECIPE_PRICE_WEIGHT) / pow((float)steps, RECIPE_STEPS_WEIGHT);
+		if (recipe.second.instructions.back() != "error")
+			recipe.second.rating = pow(g_recipes[id].price, RECIPE_PRICE_WEIGHT) / pow(g_recipes[id].steps, RECIPE_STEPS_WEIGHT);
+		else
+			recipe.second.rating = -1;
 	}
 }
 
@@ -626,14 +703,14 @@ int getQuickestRecipe()
 
 	for (auto recipe : g_recipes)
 	{
-		if (recipe.second.steps_needed <= min_steps)
+		if (recipe.second.steps <= min_steps)
 		{
-			if (ret != -1 && recipe.second.steps_needed == min_steps)
+			if (ret != -1 && recipe.second.steps == min_steps)
 			{
 				if (recipe.second.rating < g_recipes[ret].rating)
 					continue;
 			}
-			min_steps = recipe.second.steps_needed;
+			min_steps = recipe.second.steps;
 			ret = recipe.first;
 		}
 	}
@@ -687,11 +764,11 @@ void processActions()
 		cin.ignore();
 
 		if (type == "BREW")
-			g_recipes.insert({id, Recipe(blue, green, orange, yellow, price)});
+			g_recipes.insert({id, Recipe(blue, green, orange, yellow, id, price)});
 		else if (type == "CAST")
-			g_spells.insert({id, Spell(blue, green, orange, yellow, castable, repeatable)});
+			g_spells.insert({id, Spell(blue, green, orange, yellow, id, castable, repeatable)});
 		else if (type == "LEARN")
-			g_tomes.insert({id, Tome(blue, green, orange, yellow, tome_index, tax_count, repeatable)});
+			g_tomes.insert({id, Tome(blue, green, orange, yellow, id, tome_index, tax_count, repeatable)});
 	}
 }
 
@@ -751,6 +828,9 @@ bool finishGame()
 
 void computeOutput()
 {
+	list<string> placeholder;
+	list<string> instructions;
+
 	if (tomeAvailable() && tomeLimits())
 	{
 		int tome_id = getOptimalTome();
@@ -759,9 +839,12 @@ void computeOutput()
 		if (g_tomes[tome_id].haveRequiredStones(g_inv))
 			cout << "LEARN " << tome_id << endl;
 		else
-			getRequiredStones(g_tomes[tome_id]);
+		{
+			Simulation sim(g_inv, g_spells, g_tomes[tome_id], placeholder, 0);
+			instructions = sim.getSimulationSteps();
+			cout << instructions.front() << endl;
+		}
 	}
-
 	else
 	{
 		int recipe_id = (finishGame()) ? getQuickestRecipe() : getOptimalRecipe();
@@ -773,7 +856,11 @@ void computeOutput()
 			potions_brewed++;
 		}
 		else
-			getRequiredStones(g_recipes[recipe_id]);
+		{
+			Simulation sim(g_inv, g_spells, g_recipes[recipe_id], placeholder, 0);
+			instructions = sim.getSimulationSteps();
+			cout << instructions.front() << endl;
+		}
 	}
 }
 
@@ -834,7 +921,7 @@ void printRecipes()
 			cerr << recipe.second.stones[i];
 			(i == 3) ? cerr << "]" : cerr << ", ";
 		}
-		cerr << " - rating " << recipe.second.rating << " - steps " << recipe.second.steps_needed << " - " << recipe.second.price << " rupees" << endl;
+		cerr << " - rating " << recipe.second.rating << " - steps " << recipe.second.steps << " - " << recipe.second.price << " rupees" << endl;
 	}
 }
 
