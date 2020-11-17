@@ -3,28 +3,31 @@ My bot's source code for CodinGame's [Fall Challenge 2020](https://www.codingame
 
 <a href="https://ibb.co/Wpckr89"><img src="https://i.ibb.co/YTtc5n9/Screenshot-from-2020-11-14-15-27-09.png" alt="Screenshot-from-2020-11-14-15-27-09" border="0"></a>
 
-# version 1
+# day 1 - version 1
+<p>
+My first version's strategy is based on an abstract weight distribution system for the different available ingredients.
+The weight is based on the amount of spells it takes to get a single unit of each ingredient.
+By learning new spells the weighted value of an ingredient gets recalculated.
+Using this weight system I calculated the efficiency of spells and recipes, and chose the most efficient spell / recipe each turn.
+The spell to cast was found by recursively looking for the spell that would gain the most needed ingredients. </p>
 
-My first version's strategy is based on a weight distribution system for the different available stones. <br>
-The weight is based on the amount of spells it takes to get a single unit of each stone. <br>
-The efficiency of each recipe is calculated based on the weight distribution of the ingredients, the spread of different ingredients and the reward for brewing the recipe. <br>
-New spells are only acquired from the tomebook if they are either free resources (freeloaders) or meet specific requirements to be efficient mutators. <br>
-To be qualified as mutator spells need to have both limited spread in ingredient costs and ingredient rewards and their exchange of ingredients would need to be above a certain minimum efficiency. <br>
-This efficiency is based upon the weighted value of the ingredients exchanged. <br>
+Key flaws; <br>
 
-My bot first looks for eligible spells in the tomebook, if it can't find any it tries to brew the most efficient potion. <br>
-If the required resources are not available, it looks for the most efficient spell to acquire those resources. <br>
-If the required resources are not available for that spell, it recursively looks for the most efficient spell to acquire those resources.
+- The weight system was too abstract; the exact amount of steps (including resting in between spells) were not taken into account
+- Greedy algorithm: no complete simulation of all steps involved in a recipe, finds locally best recipe / spell
+- Circular dependencies if I wanted to implement stone value dependencies in the weight distribution system
 
-This code has gotten me to around position #100 in the competition. <br>
+# day 3 - version 2
 
-Key flaws of version 1: <br>
+<p>
+I reached the limit of the first strategy and started working on a new strategy to optimize the decision making process. I needed more accuracy in terms of amount of turns needed for each action, whether it was buying a spell from the tomebook or brewing a potion. I wrote simulations with different internal rules. These simulations enabled me to get an accurate overview of the amounts of step needed for each action. I used these simulations to find the most efficient recipe in terms of reward divided by amount of steps, and also used these simulations to rewrite the weight distribution system to actually get a more accurate weighted value of the creation rate of each of the 4 different ingredients. </p>
 
-- The exact amount of steps (including resting in between spells) were not taken into account while calculating a recipe or spell's efficiency, instead I used a more abstract weight distribution system to calculcate efficiency.
-- Greedy algorithm: no complete computation of all steps, only locally best option.
-- Circular dependencies if I wanted to implement stone value dependencies in mutator spells for more accurate weight distribution.
+Key flaws; <br>
 
-# version 2
+- The weight system based on simulation creation rate seems like an unnecessary abstraction, not sure yet what to do with this
+- Different simulations follow minor change in rules, still no full depth / breadth searching algorithm
 
-During the 3rd day of the competition I reached the limit of the first strategy I was using and started working on a new strategy to optimize my decision making. <br>
-It became obvious to me that I needed a graph / tree searching algorithm for optimal results. 
+# day 5 - version 3
+
+<p>
+The simulations in the previous version were pre-defined by my own set rules. In this version I left the rules out of the simulations and implemented a depth-first searching algorithm that recursively digs deeper into the spread of possibilities. It logs its steps along the way and benchmarks its results against other searches and a known solution. </p>
