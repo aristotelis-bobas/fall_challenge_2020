@@ -2,15 +2,12 @@
 
 /// OPTIMIZATIONS /// thnx Stan lol
 
-#pragma GCC optimize("O3")
+#pragma GCC optimize("Ofast")
 #pragma GCC optimize("inline")
 #pragma GCC optimize("omit-frame-pointer")
 #pragma GCC optimize("unroll-loops")
-#pragma GCC optimize("Ofast")
 #pragma GCC option("arch=native", "tune=native", "no-zero-upper")
-#pragma GCC target("avx")
 #pragma GCC target "bmi2"
-#include <x86intrin.h>
 
 /////////////////////////////////////
 
@@ -22,12 +19,17 @@
 #include <chrono>
 #include <cmath>
 
-#define NODE_DEPTH_LIMIT 10
+#define INITIAL_DEPTH_LIMIT 15
 #define NODE_REST 777
 
 #define MUTATOR_COST_DEPTH 2
 #define MUTATOR_COST_SPREAD 1
 #define MUTATOR_GAIN_SPREAD 1
+
+#define TIER_1_VALUE 1
+#define TIER_2_VALUE 2
+#define TIER_3_VALUE 3
+#define TIER_4_VALUE 4
 
 using namespace std;
 using namespace std::chrono;
@@ -96,7 +98,7 @@ public:
 	Action(int blue, int green, int orange, int yellow, int id)
 		: Stones(blue, green, orange, yellow), id(id) {}
 
-	virtual vector<int> getMissingStones(Inventory &inv)
+	virtual vector<int> getMissingStones(const Inventory &inv)
 	{
 		vector<int> missing(4, 0);
 
@@ -106,7 +108,7 @@ public:
 		return missing;
 	}
 
-	virtual bool haveRequiredStones(Inventory &inv)
+	virtual bool haveRequiredStones(const Inventory &inv)
 	{
 		for (int i = 0; i < 4; i++)
 		{
@@ -173,7 +175,7 @@ public:
 			mutator = true;
 	}
 
-	vector<int> getMissingStones(Inventory &inv)
+	vector<int> getMissingStones(const Inventory &inv)
 	{
 		vector<int> missing(4, 0);
 
@@ -181,7 +183,7 @@ public:
 		return missing;
 	}
 
-	bool haveRequiredStones(Inventory &inv)
+	bool haveRequiredStones(const Inventory &inv)
 	{
 		if (inv.stones[0] < tax_cost)
 			return false;
@@ -196,25 +198,48 @@ public:
 	bool repeat;
 	bool repeat_flag = false;
 	int repeat_value = 0;
+	int tier_based_cost;
+	int tier_based_gain;
+	int tier_based_nett;
 
 	Spell() {}
 	Spell(int blue, int green, int orange, int yellow, int id, bool avail, bool repeat)
-		: Action(blue, green, orange, yellow, id), avail(avail), repeat(repeat) {}
+		: Action(blue, green, orange, yellow, id), avail(avail), repeat(repeat)
+	{
+		tier_based_cost = 0;
+		tier_based_gain = 0;
 
-	bool willOverflowInventory(Inventory inv, int mult = 1)
+		(stones[0] <= 0) ? tier_based_cost += TIER_1_VALUE * abs(stones[0]) : tier_based_gain += TIER_1_VALUE * stones[0];
+		(stones[1] <= 0) ? tier_based_cost += TIER_2_VALUE * abs(stones[1]) : tier_based_gain += TIER_2_VALUE * stones[1];
+		(stones[2] <= 0) ? tier_based_cost += TIER_3_VALUE * abs(stones[2]) : tier_based_gain += TIER_3_VALUE * stones[2];
+		(stones[3] <= 0) ? tier_based_cost += TIER_4_VALUE * abs(stones[3]) : tier_based_gain += TIER_4_VALUE * stones[3];
+
+		tier_based_nett = tier_based_gain - tier_based_cost;
+	}
+
+	bool willOverflowInventory(const Inventory &inv, int mult = 1)
 	{
 		int count = 0;
 
 		for (int i = 0; i < 4; i++)
 			count += (stones[i] * mult);
-
 		if (inv.slots_filled + count > 10)
 			return true;
-
 		return false;
 	}
 
-	bool haveRequiredStones(Inventory &inv, int mult = 1)
+	bool willOverflowInventory(const array<int, 5> &inv, int mult = 1)
+	{
+		int count = 0;
+
+		for (int i = 0; i < 4; i++)
+			count += (stones[i] * mult);
+		if (inv[4] + count > 10)
+			return true;
+		return false;
+	}
+
+	bool haveRequiredStones(const Inventory &inv, int mult = 1)
 	{
 		for (int i = 0; i < 4; i++)
 		{
@@ -223,54 +248,96 @@ public:
 		}
 		return true;
 	}
+
+	bool haveRequiredStones(const array<int, 5> &inv, int mult = 1)
+	{
+		for (int i = 0; i < 4; i++)
+		{
+			if (stones[i] < 0 && inv[i] < mult * abs(stones[i]))
+				return false;
+		}
+		return true;
+	}
 };
 
-void restoreSpellAvailability(map<int, Spell> &spells)
-{
-	for (auto &spell : spells)
-		spell.second.avail = true;
-}
+////////////////////////////////////// GLOBALS //////////////////////////////////////
+
+map<int, Recipe> g_recipes;
+map<int, Tome> g_tomes;
+map<int, Spell> g_spells;
+Inventory g_inv;
+int enemy_score;
 
 ////////////////////////////////////// BRUTE FORCE BACKTRACER //////////////////////////////////////
 
 /*
-	this search tree algorithm brute forces all combinations but backtracks at a certain limit (= amount of steps)
-	this limit is determined before this algorithm is called by a greedy best-first search algorithm\
+	this search tree algorithm brute forces all combinations
+	it starts adjusting its own depth limit once a solution is found
 */
 
 class Node
 {
 
 public:
+
+	/// object state
+
+	array<int, 5> inv;
+	map<int, bool> spells;
+	vector<int> log;
+	int depth;
+	vector<Node> nodes;
+	bool discarded = false;
+	bool solved = false;
+	int option_count;
+	vector<int> options;
+	map<int, int> repeats;
+	bool rest_option = false;
+
+	/// class state
+	static map<int, vector<int>> targets;
+	static int limit;
+	static int nodes_searched;
+	static int target_hits;
+	static int error_hits;
+	static int limit_hits;
+
 	// root_node constructor
-	Node(Inventory inv, map<int, Spell> spells, vector<int> target, int depth, int limit)
-		: inv(inv), spells(spells), depth(depth)
+	Node(Inventory start_inv, map<int, Spell> search_spells, map<int, vector<int>> search_targets)
 	{
-		// initialize root_node
-		for (int i = 0; i < 4; i++)
-			Node::stones[i] = target[i];
-		Node::limit = limit;
+		// initialize class state
+		Node::targets = search_targets;
+		Node::limit = INITIAL_DEPTH_LIMIT;
 		Node::nodes_searched = 0;
 		Node::target_hits = 0;
 		Node::limit_hits = 0;
 		Node::error_hits = 0;
+		
+		// initialize object state
+		inv = {start_inv.stones[0], start_inv.stones[1], start_inv.stones[2], start_inv.stones[3], start_inv.slots_filled};
+		for (auto &spell : search_spells)
+			spells[spell.first] = spell.second.avail;
+		depth = 0;
 
-		Benchmark bm;
-		bm.startBenchmark();
+		// // benchmarking search
+		// Benchmark bm;
+		// bm.startBenchmark();
 
+		// core mechanics
 		if (targetHit())
 			return;
 		getOptions();
 		if (!errorHit())
 			increaseDepth();
 
-		bm.endBenchmark();
-		cerr << "Searched " << nodes_searched << " nodes in " << bm.getResult() << " ms and found ";
-		cerr << target_hits << " target hits, " << limit_hits << " limit hits, " << error_hits << " error hits." << endl;
+		// // benchmark results
+		// bm.endBenchmark();
+		// cerr << "Searched " << nodes_searched << " nodes in " << bm.getResult() << " ms at max depth " << Node::limit << " and found ";
+		// cerr << target_hits << " target hits, " << limit_hits << " limit hits, " << error_hits << " error hits." << endl;
 	}
 
 	// child_node constructor
-	Node(Inventory inv, map<int, Spell> spells, vector<int> log, int depth)
+	Node(array<int, 5> inv, map<int, bool> spells, vector<int> log, int depth)
 		: inv(inv), spells(spells), log(log), depth(depth)
 	{
 		Node::nodes_searched++;
@@ -283,14 +350,77 @@ public:
 			increaseDepth();
 	}
 
-	////// continue writing this /////
-
-	vector<int> getOptimalLog()
+	void increaseDepth()
 	{
-		vector<vector<int>> logs = getLogs();
-
-
+		for (auto spell_id : options)
+		{
+			vector<int> mutated_log = log;
+			mutated_log.emplace_back(spell_id);
+			nodes.emplace_back(mutatedInventory(spell_id), mutatedSpells(spell_id), mutated_log, depth + 1);
+		}
+		for (auto spell : repeats)
+		{
+			vector<int> mutated_log = log;
+			mutated_log.emplace_back(spell.first * spell.second);
+			nodes.emplace_back(mutatedInventory(spell.first, spell.second), mutatedSpells(spell.first), mutated_log, depth + 1);
+		}
+		if (rest_option)
+		{
+			vector<int> mutated_log = log;
+			mutated_log.push_back(NODE_REST);
+			map<int, bool> mutated_spells = spells;
+			mutateSpellAvailability(mutated_spells);
+			nodes.emplace_back(inv, mutated_spells, mutated_log, depth + 1);
+		}
 	}
+
+	void getOptions()
+	{
+		for (auto &spell : spells)
+		{
+			if (g_spells[spell.first].haveRequiredStones(inv) && !g_spells[spell.first].willOverflowInventory(inv) && spell.second)
+				options.push_back(spell.first);
+			if (g_spells[spell.first].repeat && spell.second)
+			{
+				for (int mult = 2; mult < 10; mult++)
+				{
+					if (g_spells[spell.first].haveRequiredStones(inv, mult) && !g_spells[spell.first].willOverflowInventory(inv, mult))
+						repeats.insert({spell.first, mult});
+					else
+						break;
+				}
+			}
+			if (!rest_option && !spell.second)
+				rest_option = true;
+		}
+		option_count = options.size() + repeats.size();
+		if (rest_option)
+			option_count++;
+	}
+
+	// vector<int> getOptimalLog()
+	// {
+	// 	vector<vector<int>> logs = getLogs();
+	// 	vector<vector<int>> possible_results;
+	// 	vector<int> result;
+
+	// 	// no solutions
+	// 	if (target_hits == 0)
+	// 		return result;
+
+	// 	// only 1 solution
+	// 	if (target_hits == 1)
+	// 		return logs[0];
+
+	// 	// get all best solutions
+	// 	for (auto log : results)
+	// 	{
+	// 		if (log.size() == limit)
+	// 			possible_results.emplace_back(log);
+	// 	}
+
+	// 	///// CONTINUE HERE
+	// }
 
 	vector<vector<int>> getLogs()
 	{
@@ -318,76 +448,6 @@ public:
 		}
 	}
 
-private:
-	/// object state
-	Inventory inv;
-	map<int, Spell> spells;
-	vector<int> log;
-	int depth;
-	vector<Node> nodes;
-	bool discarded = false;
-	bool solved = false;
-	int option_count;
-	vector<int> options;
-	map<int, int> repeats;
-	bool rest_option = false;
-
-	/// class state
-	static int stones[4];
-	static int limit;
-	static int nodes_searched;
-	static int target_hits;
-	static int error_hits;
-	static int limit_hits;
-
-	void getOptions()
-	{
-		for (auto &spell : spells)
-		{
-			if (spell.second.haveRequiredStones(inv) && !spell.second.willOverflowInventory(inv) && spell.second.avail)
-				options.push_back(spell.first);
-			if (spell.second.repeat && spell.second.avail)
-			{
-				for (int mult = 2; mult < 10; mult++)
-				{
-					if (spell.second.haveRequiredStones(inv, mult) && !spell.second.willOverflowInventory(inv, mult))
-						repeats.insert({spell.first, mult});
-					else
-						break;
-				}
-			}
-			if (!rest_option && !spell.second.avail)
-				rest_option = true;
-		}
-		option_count = options.size() + repeats.size();
-		if (rest_option)
-			option_count++;
-	}
-
-	void increaseDepth()
-	{
-		for (auto spell_id : options)
-		{
-			vector<int> mutated_log = log;
-			mutated_log.emplace_back(spell_id);
-			nodes.emplace_back(mutatedInventory(spell_id), mutatedSpells(spell_id), mutated_log, depth + 1);
-		}
-		for (auto spell : repeats)
-		{
-			vector<int> mutated_log = log;
-			mutated_log.emplace_back(spell.first * spell.second);
-			nodes.emplace_back(mutatedInventory(spell.first, spell.second), mutatedSpells(spell.first), mutated_log, depth + 1);
-		}
-		if (rest_option)
-		{
-			vector<int> mutated_log = log;
-			mutated_log.push_back(NODE_REST);
-			map<int, Spell> mutated_spells = spells;
-			restoreSpellAvailability(mutated_spells);
-			nodes.emplace_back(inv, mutated_spells, mutated_log, depth + 1);
-		}
-	}
-
 	bool errorHit()
 	{
 		if (option_count == 0)
@@ -412,29 +472,42 @@ private:
 
 	bool targetHit()
 	{
-		for (int i = 0; i < 4; i++)
-		{
-			if (inv.stones[i] < stones[i])
-				return false;
+		for (auto target : targets)
+		{		
+			int match = 0;
+			for (int i = 0; i < 4; i++)
+			{
+				if (inv[i] < target.second[i])
+					break;
+				else
+					match++;
+			}
+			if (match == 4)
+			{
+				log.emplace_back(target.first);
+				solved = true;
+				break;
+			}
 		}
+		if (!solved)
+			return false;
 		if (depth < limit)
-			limit = depth;
-		solved = true;
+			Node::limit = depth;
 		target_hits++;
 		return true;
 	}
 
-	Inventory mutatedInventory(int spell_id, int mult = 1)
+	array<int, 5> mutatedInventory(int spell_id, int mult = 1)
 	{
-		Inventory tmp;
-
-		tmp = inv;
-		tmp.slots_filled = 0;
+		array<int, 5> tmp = inv;
+		
+		/// reset filled slots
+		tmp[4] = 0;
 
 		for (int i = 0; i < 4; i++)
 		{
-			(spells[spell_id].stones[i] <= 0) ? tmp.stones[i] -= mult * abs(spells[spell_id].stones[i]) : tmp.stones[i] += mult * spells[spell_id].stones[i];
-			tmp.slots_filled += tmp.stones[i];
+			(g_spells[spell_id].stones[i] <= 0) ? tmp[i] -= mult * abs(g_spells[spell_id].stones[i]) : tmp[i] += mult * g_spells[spell_id].stones[i];
+			tmp[4] += tmp[i];
 		}
 
 		// cerr << "inventory mutation from: [";
@@ -460,59 +533,53 @@ private:
 		return tmp;
 	}
 
-	map<int, Spell> mutatedSpells(int spell_id)
+	map<int, bool> mutatedSpells(int spell_id)
 	{
-		map<int, Spell> tmp;
-		tmp = spells;
-
-		tmp[spell_id].avail = false;
+		map<int, bool> tmp = spells;
+		tmp[spell_id] = false;
 		return tmp;
 	}
 
+	void mutateSpellAvailability(map<int, bool> &spells)
+	{
+		for (auto &spell : spells)
+			spell.second = true;
+	}
 };
 
 // static initializations
-int Node::stones[4] = {0, 0, 0, 0};
+map<int, vector<int>> Node::targets;
 int Node::limit;
 int Node::nodes_searched;
 int Node::target_hits;
 int Node::error_hits;
 int Node::limit_hits;
 
-////////////////////////////////////// GLOBALS //////////////////////////////////////
-
-map<int, Recipe> g_recipes;
-map<int, Tome> g_tomes;
-map<int, Spell> g_spells;
-Inventory g_inv;
-int enemy_score;
-
 ////////////////////////////////////// RECIPE MECHANICS //////////////////////////////////////
 
-void printLogs(int recipe_id, vector<vector<int>> results)
+void printLogs(vector<vector<int>> results)
 {
-	Recipe recipe = g_recipes[recipe_id];
+	// cerr << results.size() << " logs for recipe " << recipe.id << " [";
+	// for (int i = 0; i < 4; i++)
+	// {
+	// 	cerr << recipe.stones[i];
+	// 	(i == 3) ? cerr << "] " : cerr << ", ";
+	// }
+	// cerr << "missing [";
+	// vector<int> missing = recipe.getMissingStones(g_inv);
+	// for (int i = 0; i < 4; i++)
+	// {
+	// 	cerr << missing[i];
+	// 	(i == 3) ? cerr << "]" : cerr << ", ";
+	// }
+	// cerr << ":" << endl;
 
-	cerr << results.size() << " logs for recipe " << recipe.id << " [";
-	for (int i = 0; i < 4; i++)
-	{
-		cerr << recipe.stones[i];
-		(i == 3) ? cerr << "] " : cerr << ", ";
-	}
-	cerr << "missing [";
-	vector<int> missing = recipe.getMissingStones(g_inv);
-	for (int i = 0; i < 4; i++)
-	{
-		cerr << missing[i];
-		(i == 3) ? cerr << "]" : cerr << ", ";
-	}
-	cerr << ":" << endl;
 	for (auto log : results)
 	{
-		cerr << log.size() << " steps: ";
+		cerr << "Recipe " << log.back() << " in " << log.size() - 1 << " steps: ";
 		for (auto step : log)
 		{
-			if (step != 777)
+			if (step != NODE_REST)
 				cerr << step;
 			else
 				cerr << "REST";
@@ -522,15 +589,40 @@ void printLogs(int recipe_id, vector<vector<int>> results)
 	}
 }
 
-void searchRecipes()
+void benchmarkSearcher()
 {
+	map<int, vector<int>> search_targets;
 	for (auto recipe : g_recipes)
-	{
-		Node root_node(g_inv, g_spells, recipe.second.getMissingStones(g_inv), 0, NODE_DEPTH_LIMIT);
+		search_targets[recipe.first] = recipe.second.getMissingStones(g_inv);
 
-		vector<vector<int>> results = root_node.getLogs();
-		printLogs(recipe.second.id, results);
+	Benchmark bm;
+	bm.startBenchmark();
+
+	for (int i = 0; i < 50; i++)
+	{
+		Node root_node(g_inv, g_spells, search_targets);
+		//vector<vector<int>> results = root_node.getLogs();
+		//printLogs(results);
 	}
+	bm.endBenchmark();
+	bm.printResult();
+	cout << "mean search time: " << bm.getResult() / 50.0 << endl;
+}
+
+/////////////////////////////////// TEST INPUT ///////////////////////////////////
+
+void testInput()
+{
+	g_recipes.insert({60, Recipe(0, 0, -5, 0, 60, 16)});
+	g_recipes.insert({62, Recipe(0, -2, 0, -3, 62, 19)});
+	g_recipes.insert({72, Recipe(0, -2, -2, -2, 72, 19)});
+	g_recipes.insert({74, Recipe(-3, -1, -1, -1, 74, 14)});
+	g_recipes.insert({75, Recipe(-1, -3, -1, -1, 75, 16)});
+
+	g_spells.insert({78, Spell(2, 0, 0, 0, 78, true, false)});
+	g_spells.insert({79, Spell(-1, 1, 0, 0, 79, true, false)});
+	g_spells.insert({80, Spell(0, -1, 1, 0, 80, true, false)});
+	g_spells.insert({81, Spell(0, 0, -1, 1, 81, true, false)});
 }
 
 /////////////////////////////////// INPUT & INITIALIZATIONS ///////////////////////////////////
@@ -650,7 +742,7 @@ void printRecipes()
 void printData()
 {
 	printRecipes();
-	printTomes();
+	//printTomes();
 	printSpells();
 }
 
@@ -675,9 +767,12 @@ int main()
 {
 	while (true)
 	{
-		processInput();
+		testInput();
+		benchmarkSearcher();
+		//processInput();
 		//printData();
-		searchRecipes();
-		printAction();
+		//searchRecipes();
+		//printAction();
+		return 0;
 	}
 }
