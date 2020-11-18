@@ -11,13 +11,12 @@
 
 /// CODINGAME SERVER OPTIMIZATIONS ///
 
-#pragma GCC optimize("O3")
+#pragma GCC optimize("Ofast")
 #pragma GCC optimize("inline")
 #pragma GCC optimize("omit-frame-pointer")
-#pragma GCC optimize("unroll-loops") //Optimization flags
-#pragma GCC optimize("Ofast")
+#pragma GCC optimize("unroll-loops")
 #pragma GCC option("arch=native", "tune=native", "no-zero-upper")
-#pragma GCC target("avx")										  
+#pragma GCC target("avx")
 #pragma GCC target "bmi2"
 #include <x86intrin.h>
 
@@ -31,9 +30,12 @@
 #include <chrono>
 #include <cmath>
 
-#define NODE_COUNT 1000000
-#define INITIAL_DEPTH_LIMIT 10
+#define NODE_COUNT 100000
+#define LOG_COUNT 1000
+#define INITIAL_DEPTH_LIMIT 6
 #define NODE_REST 777
+
+#define MIN_SPELLS 12
 
 #define MUTATOR_COST_DEPTH 2
 #define MUTATOR_COST_SPREAD 1
@@ -41,8 +43,8 @@
 
 #define TIER_1_VALUE 1
 #define TIER_2_VALUE 2
-#define TIER_3_VALUE 3
-#define TIER_4_VALUE 4
+#define TIER_3_VALUE 4
+#define TIER_4_VALUE 8
 
 using namespace std;
 using namespace std::chrono;
@@ -111,16 +113,6 @@ public:
 	Action(int blue, int green, int orange, int yellow, int id)
 		: Stones(blue, green, orange, yellow), id(id) {}
 
-	virtual vector<int> getMissingStones(const Inventory &inv)
-	{
-		vector<int> missing(4, 0);
-
-		for (int i = 0; i < 4; i++)
-			missing[i] = (stones[i] < 0 && inv.stones[i] < abs(stones[i])) ? abs(stones[i]) - inv.stones[i] : 0;
-
-		return missing;
-	}
-
 	virtual bool haveRequiredStones(const Inventory &inv)
 	{
 		for (int i = 0; i < 4; i++)
@@ -143,16 +135,15 @@ public:
 	Recipe() {}
 	Recipe(int blue, int green, int orange, int yellow, int id, int price)
 		: Action(blue, green, orange, yellow, id), price(price) {}
-	
-	vector<int> getRecipe()
+
+	vector<int> getCost()
 	{
-		vector<int> v_recipe;
+		vector<int> cost;
 
 		for (int i = 0; i < 4; i++)
-			v_recipe.emplace_back(abs(stones[i]));
-		return v_recipe;
+			cost.emplace_back(abs(stones[i]));
+		return cost;
 	}
-
 };
 
 class Tome : public Action
@@ -160,6 +151,9 @@ class Tome : public Action
 public:
 	int tax_cost;
 	int tax_gain;
+	int tier_based_cost;
+	int tier_based_gain;
+	int tier_based_nett;
 	int gain_spread;
 	int cost_spread;
 	int gain_depth;
@@ -172,6 +166,16 @@ public:
 	Tome(int blue, int green, int orange, int yellow, int id, int tax_cost, int tax_gain, bool repeat)
 		: Action(blue, green, orange, yellow, id), tax_cost(tax_cost), tax_gain(tax_gain), repeat(repeat)
 	{
+		tier_based_cost = 0;
+		tier_based_gain = 0;
+
+		(stones[0] <= 0) ? tier_based_cost += TIER_1_VALUE * abs(stones[0]) : tier_based_gain += TIER_1_VALUE * stones[0];
+		(stones[1] <= 0) ? tier_based_cost += TIER_2_VALUE * abs(stones[1]) : tier_based_gain += TIER_2_VALUE * stones[1];
+		(stones[2] <= 0) ? tier_based_cost += TIER_3_VALUE * abs(stones[2]) : tier_based_gain += TIER_3_VALUE * stones[2];
+		(stones[3] <= 0) ? tier_based_cost += TIER_4_VALUE * abs(stones[3]) : tier_based_gain += TIER_4_VALUE * stones[3];
+
+		tier_based_nett = tier_based_gain - tier_based_cost;
+
 		gain_spread = 0;
 		cost_spread = 0;
 		cost_depth = 0;
@@ -198,12 +202,12 @@ public:
 			mutator = true;
 	}
 
-	vector<int> getMissingStones(const Inventory &inv)
+	vector<int> getCost()
 	{
-		vector<int> missing(4, 0);
+		vector<int> cost(4, 0);
 
-		missing[0] = (inv.stones[0] < tax_cost) ? tax_cost - inv.stones[0] : 0;
-		return missing;
+		cost[0] = tax_cost;
+		return cost;
 	}
 
 	bool haveRequiredStones(const Inventory &inv)
@@ -288,12 +292,38 @@ public:
 class Node;
 
 vector<Node> g_nodes;
+vector<vector<int>> g_logs;
 map<int, Recipe> g_recipes;
 map<int, Tome> g_tomes;
 map<int, Spell> g_spells;
 Inventory g_inv;
 string g_step;
 int enemy_score;
+
+////////////////////////////////////// SPELL UTILITIES  //////////////////////////////////////
+
+bool isRepeatingSpell(int log_id)
+{
+	for (auto spell : g_spells)
+	{
+		if (log_id == spell.second.id)
+			return false;
+	}
+	return true;
+}
+
+pair<int, int> getRepeatingSpell(int log_id)
+{
+	for (auto spell : g_spells)
+	{
+		for (int i = 2; i < 10; i++)
+		{
+			if (log_id / i == spell.second.id)
+				return {spell.second.id, i};
+		}
+	}
+	return {0, 0};
+}
 
 ////////////////////////////////////// BRUTE FORCE SEARCHER //////////////////////////////////////
 
@@ -313,7 +343,6 @@ public:
 	map<int, bool> spells;
 	vector<int> log;
 	int depth;
-	vector<int> child_nodes;
 	bool discarded = false;
 	bool solved = false;
 	int option_count;
@@ -370,7 +399,6 @@ public:
 	// clean up state of recycled Node
 	void cleanNode()
 	{
-		child_nodes.clear();
 		options.clear();
 		repeats.clear();
 		option_count = 0;
@@ -403,26 +431,18 @@ public:
 	{
 		for (auto spell_id : options)
 		{
-			vector<int> mutated_log = log;
-			mutated_log.emplace_back(spell_id);
-			child_nodes.emplace_back(Node::nodes_searched);
-			g_nodes[Node::nodes_searched].createChildNode(mutatedInventory(spell_id), mutatedSpells(spell_id), mutated_log, depth + 1);
+			g_nodes[Node::nodes_searched].createChildNode(mutatedInventory(spell_id), mutatedSpells(spell_id), mutatedLog(spell_id), depth + 1);
 		}
 		for (auto spell : repeats)
 		{
-			vector<int> mutated_log = log;
-			mutated_log.emplace_back(spell.first * spell.second);
-			child_nodes.emplace_back(Node::nodes_searched);
-			g_nodes[Node::nodes_searched].createChildNode(mutatedInventory(spell.first, spell.second), mutatedSpells(spell.first), mutated_log, depth + 1);
+			g_nodes[Node::nodes_searched].createChildNode(mutatedInventory(spell.first, spell.second), mutatedSpells(spell.first), mutatedLog(spell.first * spell.second), depth + 1);
 		}
 		if (rest_option)
 		{
-			vector<int> mutated_log = log;
-			mutated_log.push_back(NODE_REST);
 			map<int, bool> mutated_spells = spells;
 			mutateSpellAvailability(mutated_spells);
-			child_nodes.emplace_back(Node::nodes_searched);
-			g_nodes[Node::nodes_searched].createChildNode(inv, mutated_spells, mutated_log, depth + 1);
+
+			g_nodes[Node::nodes_searched].createChildNode(inv, mutated_spells, mutatedLog(NODE_REST), depth + 1);
 		}
 	}
 
@@ -448,141 +468,6 @@ public:
 		option_count = options.size() + repeats.size();
 		if (rest_option)
 			option_count++;
-	}
-
-	bool isRepeatingSpell(int log_id)
-	{
-		for (auto spell : g_spells)
-		{
-			if (log_id == spell.second.id)
-				return false;
-		}
-		return true;
-	}
-
-	pair<int, int> getRepeatingSpell(int log_id)
-	{
-		for (auto spell : g_spells)
-		{
-			for (int i = 2; i < 10; i++)
-			{
-				if (log_id / i == spell.second.id)
-					return {spell.second.id, i};
-			}
-		}
-		return {0, 0};
-	}
-
-	string getStep()
-	{
-		vector<int> optimal_log = getOptimalLog();
-
-		if (optimal_log.empty())
-			return "LEARN " + to_string(getFreeTome());
-		if (optimal_log.size() == 1)
-			return "BREW " + to_string(optimal_log.front());
-		else if (optimal_log.front() == NODE_REST)
-			return "REST";
-		else if (isRepeatingSpell(optimal_log.front()))
-		{
-			pair<int, int> repeat = getRepeatingSpell(optimal_log.front());
-			return "CAST " + to_string(repeat.first) + " " + to_string(repeat.second);
-		}
-		else
-			return "CAST " + to_string(optimal_log.front());
-	}
-
-	vector<int> getOptimalLog()
-	{
-		vector<vector<int>> all_logs = getLogs();
-		vector<vector<int>> logs;
-		vector<int> result;
-
-		// no solutions
-		if (target_hits == 0)
-			return result;
-
-		// only 1 solution
-		if (target_hits == 1)
-			return all_logs[0];
-
-		// filter out suboptimal logs
-		for (auto &log : all_logs)
-		{
-			if (log.size() - 1 == limit)
-				logs.emplace_back(log);
-		}
-
-		for (int i = 0; i < limit; i++)
-		{
-			// getting tier based gain of log current step
-
-			vector<int> gains;
-
-			for (int y = 0; y < logs.size(); y++)
-			{
-				if (logs[y][i] == NODE_REST)
-					gains.emplace_back(0);
-				else if (isRepeatingSpell(logs[y][i]))
-				{
-					pair<int, int> instruction = getRepeatingSpell(logs[y][i]);
-					gains.emplace_back(g_spells[instruction.first].tier_based_nett * instruction.second);
-				}
-				else
-					gains.emplace_back(g_spells[logs[y][i]].tier_based_nett);
-			}
-
-			// finding highest tier based gain of current step
-
-			int max_gain = -1234;
-
-			for (auto &gain : gains)
-			{
-				if (gain > max_gain)
-					max_gain = gain;
-			}
-
-			// filtering out suboptimal logs
-
-			vector<vector<int>> tmp = logs;
-			logs.clear();
-
-			for (int y = 0; y < tmp.size(); y++)
-			{
-				if (gains[y] == max_gain)
-					logs.emplace_back(tmp[y]);
-			}
-
-			if (logs.size() == 1)
-				break;
-		}
-		return logs.front();
-	}
-
-	vector<vector<int>> getLogs()
-	{
-		vector<vector<int>> logs;
-
-		if (discarded)
-			return logs;
-		else if (solved)
-		{
-			logs.emplace_back(log);
-			return logs;
-		}
-		else
-		{
-			for (auto child_node : child_nodes)
-			{
-				vector<vector<int>> child_logs = g_nodes[child_node].getLogs();
-				if (!child_logs.empty())
-				{
-					for (auto &log : child_logs)
-						logs.emplace_back(log);
-				}
-			}
-			return logs;
-		}
 	}
 
 	bool errorHit()
@@ -622,6 +507,7 @@ public:
 			if (match == 4)
 			{
 				log.emplace_back(target.first);
+				g_logs.emplace_back(log);
 				solved = true;
 				break;
 			}
@@ -647,26 +533,6 @@ public:
 			tmp[4] += tmp[i];
 		}
 
-		// cerr << "inventory mutation from: [";
-		// for (int i = 0; i < 4; i++)
-		// {
-		// 	cerr << inv[i];
-		// 	(i == 3) ? cerr << "] " : cerr << ", ";
-		// }
-		// cerr << "to [";
-		// for (int i = 0; i < 4; i++)
-		// {
-		// 	cerr << tmp[i];
-		// 	(i == 3) ? cerr << "] " : cerr << ", ";
-		// }
-		// cerr << "by spell [";
-		// for (int i = 0; i < 4; i++)
-		// {
-		// 	cerr << g_spells[spell_id].stones[i];
-		// 	(i == 3) ? cerr << "] " : cerr << ", ";
-		// }
-		// cerr << endl;
-
 		return tmp;
 	}
 
@@ -681,6 +547,13 @@ public:
 	{
 		for (auto &spell : spells)
 			spell.second = true;
+	}
+
+	vector<int> mutatedLog(int insert)
+	{
+		vector<int> tmp = log;
+		tmp.emplace_back(insert);
+		return tmp;
 	}
 };
 
@@ -706,82 +579,222 @@ void initializeNodes()
 	cerr << "Created global node tree of size " << NODE_COUNT << " in " << bm.getResult() << " ms." << endl;
 }
 
-void benchmarkSearcher()
+////////////////////////////////////// SEARCH LOGS  //////////////////////////////////////
+
+vector<int> getOptimalLog(int limit)
 {
-	map<int, vector<int>> search_targets;
-	for (auto recipe : g_recipes)
-		search_targets[recipe.first] = recipe.second.getMissingStones(g_inv);
+	vector<int> result;
 
-	Benchmark bm;
-	bm.startBenchmark();
+	// no solutions
+	if (g_logs.empty())
+		return result;
 
-	for (int i = 0; i < 50; i++)
+	// only 1 solution
+	if (g_logs.size() == 1)
+		return g_logs[0];
+
+	// filter out suboptimal logs
+	vector<vector<int>> logs;
+
+	for (auto &log : g_logs)
 	{
-		Node root_node(g_inv, g_spells, search_targets);
-		//vector<vector<int>> results = root_node.getLogs();
-		//printLogs(results);
+		if (log.size() - 1 == limit)
+			logs.emplace_back(log);
 	}
-	bm.endBenchmark();
-	bm.printResult();
-	cout << "mean search time: " << bm.getResult() / 50.0 << endl;
-}
 
-////////////////////////////////////// RECIPE MECHANICS //////////////////////////////////////
+	for (int i = 0; i < limit; i++)
+	{
+		// getting tier based gain of log current step
 
-void printOptimalLog(vector<int> result)
-{
-	if (result.size() == 1)
-	{
-		cerr << "Recipe: " << result.back() << " ready to brew." << endl;
-		return;
-	}
-	cerr << "Recipe " << result.back() << " in " << result.size() - 1 << " step(s): ";
-	for (auto step : result)
-	{
-		if (step == result.back())
-			continue;
-		if (step != NODE_REST)
-			cerr << step;
-		else
-			cerr << "REST";
-		cerr << ", ";
-	}
-	cerr << endl;
-}
+		vector<int> gains;
 
-void printLogs(vector<vector<int>> results)
-{
-	for (auto log : results)
-	{
-		cerr << "Recipe " << log.back() << " in " << log.size() - 1 << " step(s): ";
-		for (auto step : log)
+		for (int y = 0; y < logs.size(); y++)
 		{
-			if (step == log.back())
-				continue;
-			if (step != NODE_REST)
-				cerr << step;
+			if (logs[y][i] == NODE_REST)
+				gains.emplace_back(0);
+			else if (isRepeatingSpell(logs[y][i]))
+			{
+				pair<int, int> instruction = getRepeatingSpell(logs[y][i]);
+				gains.emplace_back(g_spells[instruction.first].tier_based_nett * instruction.second);
+			}
 			else
-				cerr << "REST";
-			cerr << ", ";
+				gains.emplace_back(g_spells[logs[y][i]].tier_based_nett);
 		}
-		cerr << endl;
+
+		// finding highest tier based gain of current step
+
+		int max_gain = -1234;
+
+		for (auto &gain : gains)
+		{
+			if (gain > max_gain)
+				max_gain = gain;
+		}
+
+		// filtering out suboptimal logs
+
+		vector<vector<int>> tmp = logs;
+		logs.clear();
+
+		for (int y = 0; y < tmp.size(); y++)
+		{
+			if (gains[y] == max_gain)
+				logs.emplace_back(tmp[y]);
+		}
+
+		if (logs.size() == 1)
+			break;
 	}
+	return logs.front();
 }
+
+string getStep(int limit)
+{
+	vector<int> optimal_log = getOptimalLog(limit);
+
+	if (optimal_log.empty())
+	{
+		cerr << "Empty step. Learning free tome instead." << endl;
+		return "LEARN " + to_string(getFreeTome()) + " DEEZ NUTS";
+	}
+	if (optimal_log.size() == 1)
+	{
+		for (auto &recipe : g_recipes)
+		{
+			if (recipe.second.id == optimal_log.front())
+				return "BREW " + to_string(optimal_log.front()) + " HERE'S YOUR SHIT, SIR";
+		}
+		for (auto &tome : g_tomes)
+		{
+			if (tome.second.id == optimal_log.front())
+				return "LEARN " + to_string(optimal_log.front());
+		}
+		///// NO SUPPORT FOR REPEATING SPELLS (!)
+		for (auto &spell : g_spells)
+		{
+			if (spell.second.id == optimal_log.front())
+				return "CAST " + to_string(optimal_log.front());
+		}
+	}
+	else if (optimal_log.front() == NODE_REST)
+		return "REST";
+	else if (isRepeatingSpell(optimal_log.front()))
+	{
+		pair<int, int> repeat = getRepeatingSpell(optimal_log.front());
+		return "CAST " + to_string(repeat.first) + " " + to_string(repeat.second);
+	}
+	else
+		return "CAST " + to_string(optimal_log.front());
+}
+
+void addLog(vector<int> log)
+{
+	g_logs.emplace_back(log);
+}
+
+void initializeLogs()
+{
+	g_logs.reserve(LOG_COUNT);
+}
+
+void cleanLogs()
+{
+	g_logs.clear();
+}
+
+//////////////////////////////////////////////// SEARCHES /////////////////////////////////////////
+
+void printOptimalLog(vector<int> result);
+void printLogs(vector<vector<int>> results);
 
 void searchRecipes()
 {
 	map<int, vector<int>> search_targets;
+
 	for (auto recipe : g_recipes)
-		search_targets[recipe.first] = recipe.second.getRecipe();
+		search_targets[recipe.first] = recipe.second.getCost();
 
 	Node root_node(g_inv, g_spells, search_targets);
 
-	g_step = root_node.getStep();
-	cerr << "=====OPTIMAL LOG====" << endl;
-	printOptimalLog(root_node.getOptimalLog());
-	//cerr << "=====ALL LOGS====" << endl;
-	//printLogs(root_node.getLogs());
-	
+	g_step = getStep(root_node.limit);
+
+	// debug
+	printOptimalLog(getOptimalLog(root_node.limit));
+	//printLogs(g_logs);
+}
+
+void searchTome(int tome_id)
+{
+	map<int, vector<int>> search_targets;
+
+	search_targets[tome_id] = g_tomes[tome_id].getCost();
+
+	Node root_node(g_inv, g_spells, search_targets);
+
+	g_step = getStep(root_node.limit);
+
+	// debug
+	printOptimalLog(getOptimalLog(root_node.limit));
+}
+
+////////////////////////////////////// TOME MECHANICS ///////////////////////////////////
+
+int getFreeTome()
+{
+	for (auto tome : g_tomes)
+	{
+		if (tome.second.tax_cost == 0)
+			return tome.first;
+	}
+	return -1;
+}
+
+bool hasFreeloader()
+{
+	for (auto tome : g_tomes)
+	{
+		if (tome.second.freeloader)
+			return true;
+	}
+	return false;
+}
+
+int getOptimalFreeloader()
+{
+	int max_gain = -999;
+	vector<int> tmp_tomes;
+	int ret = 0;
+
+	for (auto tome : g_tomes)
+	{
+		if (tome.second.freeloader)
+			tmp_tomes.push_back(tome.first);
+	}
+	for (auto i : tmp_tomes)
+	{
+		if (g_tomes[i].tier_based_nett >= max_gain)
+		{
+			if (ret != 0 && g_tomes[i].tier_based_nett == max_gain)
+			{
+				if (g_tomes[i].gain_spread > g_tomes[ret].gain_spread)
+					continue;
+			}
+			ret = i;
+			max_gain = g_tomes[i].tier_based_nett;
+		}
+	}
+	return ret;
+}
+
+void learnTome(int tome_id)
+{
+	if (g_tomes[tome_id].haveRequiredStones(g_inv))
+		cout << "LEARN " << tome_id << endl;
+	else
+	{
+		searchTome(tome_id);
+		cout << g_step << endl;
+	}
 }
 
 /////////////////////////////////// TEST INPUT ///////////////////////////////////
@@ -864,7 +877,74 @@ void processInput()
 	processInventory();
 }
 
+//////////////////////////////////////////////// BENCHMARK /////////////////////////////////////////
+
+void benchmarkSearcher()
+{
+	map<int, vector<int>> search_targets;
+	for (auto recipe : g_recipes)
+		search_targets[recipe.first] = recipe.second.getCost();
+
+	Benchmark bm;
+	bm.startBenchmark();
+
+	for (int i = 0; i < 50; i++)
+	{
+		Node root_node(g_inv, g_spells, search_targets);
+		//vector<vector<int>> results = root_node.getLogs();
+		//printLogs(results);
+	}
+	bm.endBenchmark();
+	bm.printResult();
+	cout << "mean search time: " << bm.getResult() / 50.0 << endl;
+}
+
 //////////////////////////////////////////////// DEBUG /////////////////////////////////////////
+
+void printOptimalLog(vector<int> result)
+{
+	if (result.empty())
+	{
+		cerr << "No results." << endl;
+		return;
+	}
+	if (result.size() == 1)
+	{
+		cerr << "All ingredients for action " << result.back() << " are available." << endl;
+		return;
+	}
+	cerr << "Action " << result.back() << " in " << result.size() - 1 << " step(s): ";
+	for (auto step : result)
+	{
+		if (step == result.back())
+			continue;
+		if (step != NODE_REST)
+			cerr << step;
+		else
+			cerr << "REST";
+		cerr << ", ";
+	}
+	cerr << endl;
+}
+
+void printLogs(vector<vector<int>> results)
+{
+	for (auto log : results)
+	{
+		cerr << "Action " << log.back() << " in " << log.size() - 1 << " step(s): ";
+		for (auto step : log)
+		{
+			if (step == log.back())
+				continue;
+			if (step != NODE_REST)
+				cerr << step;
+			else
+				cerr << "REST";
+			cerr << ", ";
+		}
+		cerr << endl;
+	}
+}
 
 void printSpells()
 {
@@ -923,36 +1003,45 @@ void printData()
 
 ////////////////////////////////////// HIGH LEVEL CONTROL FLOW ///////////////////////////////////
 
-int getFreeTome()
+void decideAction()
 {
-	for (auto tome : g_tomes)
-	{
-		if (tome.second.tax_cost == 0)
-			return tome.first;
-	}
-	return -1;
-}
+	cleanLogs();
 
-void printAction()
-{
-	//cout << "WAIT" << endl;
-	if (g_spells.size() < 12)
-		cout << "LEARN " << getFreeTome() << endl;
+	if (g_spells.size() < MIN_SPELLS)
+	{
+		if (hasFreeloader())
+			learnTome(getOptimalFreeloader());
+		else
+			cout << "LEARN " << getFreeTome() << endl;
+	}
 	else
+	{
+		searchRecipes();
 		cout << g_step << endl;
+	}
 }
 
 int main()
 {
 	initializeNodes();
+	initializeLogs();
+
+	Benchmark turn;
+	int turns = 1;
+
 	while (true)
 	{
+		/// debug ///
 		//testInput();
 		//benchmarkSearcher();
-		processInput();
 		//printData();
-		searchRecipes();
-		printAction();
-		//return 0;
+
+		processInput();
+		turn.startBenchmark();
+
+		decideAction();
+		turn.endBenchmark();
+
+		cerr << "Turn took " << turn.getResult() << " ms." << endl;
 	}
 }
