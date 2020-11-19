@@ -32,10 +32,11 @@
 
 #define NODE_COUNT 100000
 #define LOG_COUNT 1000
-#define INITIAL_DEPTH_LIMIT 6
+#define INITIAL_DEPTH_LIMIT 10
 #define NODE_REST 777
 
 #define MIN_SPELLS 12
+#define TIMER_CUTOFF 50
 
 #define MUTATOR_COST_DEPTH 2
 #define MUTATOR_COST_SPREAD 1
@@ -69,6 +70,30 @@ private:
 	high_resolution_clock::time_point start;
 	high_resolution_clock::time_point end;
 	duration<double, milli> time_span;
+};
+
+class Timer
+{
+public:
+	bool time_to_go = false;
+	Timer() { start = high_resolution_clock::now(); }
+	bool isItTimeToGo()
+	{
+		duration<double, milli> time_span = duration<double, std::milli>(high_resolution_clock::now() - start);
+		if (time_span.count() > TIMER_CUTOFF)
+		{
+			if (!time_to_go)
+			{
+				cerr << "Elapsed time in search tree: " << time_span.count() << ". Time to go!" << endl;
+				time_to_go = true;
+			}
+			return true;
+		}
+		return false;
+	}
+
+private:
+	high_resolution_clock::time_point start;
 };
 
 struct Stones
@@ -351,6 +376,7 @@ public:
 	bool rest_option = false;
 
 	/// class state
+	static Timer timer;
 	static map<int, vector<int>> targets;
 	static int limit;
 	static int nodes_searched;
@@ -368,6 +394,7 @@ public:
 		Node::target_hits = 0;
 		Node::limit_hits = 0;
 		Node::error_hits = 0;
+		Node::timer = Timer();
 
 		// initialize object state
 		inv = {start_inv.stones[0], start_inv.stones[1], start_inv.stones[2], start_inv.stones[3], start_inv.slots_filled};
@@ -389,7 +416,7 @@ public:
 
 		// benchmark results
 		bm.endBenchmark();
-		cerr << "Searched " << nodes_searched << " nodes in " << bm.getResult() << " ms at max depth " << Node::limit << " and found ";
+		cerr << "Searched " << nodes_searched << " nodes in " << bm.getResult() << " ms and found ";
 		cerr << target_hits << " target hits, " << limit_hits << " limit hits, " << error_hits << " error hits." << endl;
 	}
 
@@ -423,7 +450,7 @@ public:
 		if (targetHit())
 			return;
 		getOptions();
-		if (!errorHit())
+		if (!errorHit() && !timer.isItTimeToGo())
 			increaseDepth();
 	}
 
@@ -559,6 +586,7 @@ public:
 
 // static initializations
 map<int, vector<int>> Node::targets;
+Timer Node::timer;
 int Node::limit;
 int Node::nodes_searched;
 int Node::target_hits;
@@ -723,20 +751,6 @@ void searchRecipes()
 	//printLogs(g_logs);
 }
 
-void searchTome(int tome_id)
-{
-	map<int, vector<int>> search_targets;
-
-	search_targets[tome_id] = g_tomes[tome_id].getCost();
-
-	Node root_node(g_inv, g_spells, search_targets);
-
-	g_step = getStep(root_node.limit);
-
-	// debug
-	printOptimalLog(getOptimalLog(root_node.limit));
-}
-
 ////////////////////////////////////// TOME MECHANICS ///////////////////////////////////
 
 int getFreeTome()
@@ -784,17 +798,6 @@ int getOptimalFreeloader()
 		}
 	}
 	return ret;
-}
-
-void learnTome(int tome_id)
-{
-	if (g_tomes[tome_id].haveRequiredStones(g_inv))
-		cout << "LEARN " << tome_id << endl;
-	else
-	{
-		searchTome(tome_id);
-		cout << g_step << endl;
-	}
 }
 
 /////////////////////////////////// TEST INPUT ///////////////////////////////////
@@ -1010,7 +1013,13 @@ void decideAction()
 	if (g_spells.size() < MIN_SPELLS)
 	{
 		if (hasFreeloader())
-			learnTome(getOptimalFreeloader());
+		{
+			int tome_id = getOptimalFreeloader();
+			if (g_tomes[tome_id].haveRequiredStones(g_inv))
+				cout << "LEARN " << tome_id << endl;
+			else
+				cout << "LEARN " << getFreeTome() << endl;
+		}
 		else
 			cout << "LEARN " << getFreeTome() << endl;
 	}
