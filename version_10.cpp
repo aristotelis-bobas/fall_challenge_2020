@@ -24,16 +24,22 @@
 #include <cmath>
 #include <cstdlib>
 
-#define DEPTH_LIMIT 10
-#define SURVEY_DEPTH 6
+#define POWER_DEPTH_LIMIT 10
+#define GREEDY_DEPTH_LIMIT 9
+#define FAST_DEPTH_LIMIT 8
+
+#define PURE_SURVEY_DEPTH 2
+#define POWER_SURVEY_DEPTH 5
+#define GREEDY_SURVEY_DEPTH 8
+#define FAST_SURVEY_DEPTH 8
 
 #define MAX_SPELLS 11
 #define MAX_TAX_COST 1
-#define TIMER_CUTOFF 47
+#define TIMER_CUTOFF 45
 
 #define NODE_REST 777
-#define NODE_COUNT 90000
-#define LOG_COUNT 10000
+#define NODE_COUNT 50000
+#define LOG_COUNT 1000
 
 #define TIER_1_VALUE 1
 #define TIER_2_VALUE 2
@@ -45,24 +51,48 @@ using namespace std::chrono;
 
 void processInput();
 int getFreeTome();
-void printOptimalLog(vector<int> result);
-void printLogs(vector<vector<int>> results);
-void testInput();
-void benchmarkCycles(int cycles);
-void benchmarkAllRecipes();
+void addLog(vector<int> log);
+int getDepthLimit();
 
 ////////////////////////////////////// STRATEGY ///////////////////////////////////
 
 map<int, string> g_strategy;
 
+void randomStrategy()
+{
+	for (int i = 0; i < 6; i++)
+	{
+		if (i < 2)
+		{
+			int random = rand() % 2;
+			
+			if (random == 0)
+				g_strategy.insert({i, "power"});
+			else if (random == 1)
+				g_strategy.insert({i, "greedy"});
+		}
+		else
+		{
+			int random = rand() % 2;
+			
+			if (random == 0)
+				g_strategy.insert({i, "greedy"});
+			else if (random == 1)
+				g_strategy.insert({i, "fast"});
+		}
+	}
+}
+
 void initializeStrategy()
 {
-	g_strategy.insert({0, "fast"});
-	g_strategy.insert({1, "fast"});
-	g_strategy.insert({2, "fast"});
-	g_strategy.insert({3, "fast"});
-	g_strategy.insert({4, "fast"});
-	g_strategy.insert({5, "fast"});
+	randomStrategy();
+
+	// g_strategy.insert({0, "greedy"});
+	// g_strategy.insert({1, "fast"});
+	// g_strategy.insert({2, "fast"});
+	// g_strategy.insert({3, "fast"});
+	// g_strategy.insert({4, "greedy"});
+	// g_strategy.insert({5, "fast"});
 }
 
 ////////////////////////////////////// CLASSES ///////////////////////////////////
@@ -364,7 +394,9 @@ public:
 class Node;
 
 vector<Node> g_nodes;
-vector<vector<int>> g_logs;
+vector<vector<vector<int>>> g_logs;
+map<int, int> g_depths;
+map<int, int> g_log_pair;
 map<int, Recipe> g_recipes;
 map<int, Tome> g_tomes;
 map<int, Spell> g_spells;
@@ -428,20 +460,20 @@ public:
 	/// class state
 	static map<int, vector<int>> targets;
 	static int limit;
-	static int depth_cutoff;
+	static int survey_depth;
 	static int nodes_searched;
 	static int target_hits;
 	static int limit_hits;
 
 	// root_node constructor
-	Node(Inventory start_inv, map<int, Spell> search_spells, map<int, vector<int>> search_targets, int cutoff)
+	Node(Inventory start_inv, map<int, Spell> search_spells, map<int, vector<int>> search_targets, int depth_limit, int surv_depth)
 	{
 		// initialize class state
 		Node::targets = search_targets;
-		Node::limit = DEPTH_LIMIT;
+		Node::limit = depth_limit;
 		Node::nodes_searched = 0;
 		Node::target_hits = 0;
-		Node::depth_cutoff = cutoff;
+		Node::survey_depth = surv_depth;
 
 		// initialize object state
 		inv = {start_inv.stones[0], start_inv.stones[1], start_inv.stones[2], start_inv.stones[3], start_inv.slots_filled};
@@ -449,8 +481,7 @@ public:
 			spells[spell.first] = spell.second.avail;
 		depth = 0;
 
-		if (targetHit())
-			return;
+		targetHit();
 		getOptions();
 		increaseDepth();
 
@@ -481,14 +512,11 @@ public:
 		log = mutated_log;
 		depth = mutated_depth;
 
-		// end of chain conditions
-		if (targetHit())
-			return;
+		targetHit();
 		Timer::checkEndOfTurn();
 		if (limitHit())
 			return;
 
-		// expansion mechanics
 		getOptions();
 		increaseDepth();
 	}
@@ -497,11 +525,13 @@ public:
 	{
 		for (auto spell : repeats)
 		{
+			Timer::checkEndOfTurn();
 			g_nodes[Node::nodes_searched].createChildNode(mutatedInventory(spell.first, spell.second), mutatedSpells(spell.first), mutatedLog(spell.first * spell.second), depth + 1);
 		}
 		for (auto spell_id : options)
 		{
-			if (g_survey && depth >= Node::depth_cutoff)
+			Timer::checkEndOfTurn();
+			if (g_survey && depth >= Node::survey_depth)
 			{
 				if (nodePruned())
 					continue;
@@ -535,6 +565,7 @@ public:
 			}
 			if (!rest_option && !spell.second)
 				rest_option = true;
+			Timer::checkEndOfTurn();
 		}
 		option_count = options.size() + repeats.size();
 		if (rest_option)
@@ -549,16 +580,6 @@ public:
 		return true;
 	}
 
-	// turn based or game limits //
-	bool capacityHit()
-	{
-		if (Node::nodes_searched + 1 > NODE_COUNT)
-			return true;
-		if (Node::target_hits + 1 > LOG_COUNT)
-			return true;
-		return false;
-	}
-
 	bool limitHit()
 	{
 		if (depth + 1 > Node::limit)
@@ -566,34 +587,32 @@ public:
 		return false;
 	}
 
-	bool targetHit()
+	void targetHit()
 	{
-		bool solved = false;
+		int matches;
 
 		for (auto &target : targets)
 		{
-			int match = 0;
+			matches = 0;
 			for (int i = 0; i < 4; i++)
 			{
 				if (inv[i] < target.second[i])
 					break;
 				else
-					match++;
+					matches++;
 			}
-			if (match == 4)
+			if (matches == 4)
 			{
-				log.emplace_back(target.first);
-				g_logs.emplace_back(log);
-				solved = true;
-				break;
+				if (depth <= g_depths[target.first])
+				{
+					g_depths[target.first] = depth;
+					Node::target_hits++;
+					vector<int> tmp = log;
+					tmp.emplace_back(target.first);
+					addLog(tmp);
+				}
 			}
 		}
-		if (!solved)
-			return false;
-		if (depth < Node::limit)
-			Node::limit = depth;
-		Node::target_hits++;
-		return true;
 	}
 
 	array<int, 5> mutatedInventory(int spell_id, int mult = 1)
@@ -638,7 +657,7 @@ map<int, vector<int>> Node::targets;
 int Node::limit;
 int Node::nodes_searched;
 int Node::target_hits;
-int Node::depth_cutoff;
+int Node::survey_depth;
 
 void initializeNodes()
 {
@@ -656,34 +675,39 @@ void initializeNodes()
 
 ////////////////////////////////////// LOGS  //////////////////////////////////////
 
-/// gets optimal log from the previous search
 /// retrieves all minimum step options and finds the most gain (based on ingredient tier) / step option
 
-vector<int> getOptimalLog()
+vector<int> getOptimalLog(vector<vector<int>> result_logs)
 {
 	vector<int> result;
 
 	// no solutions
-	if (g_logs.empty())
+	if (result_logs.empty())
 		return result;
 
 	// only 1 solution
-	if (g_logs.size() == 1)
-		return g_logs[0];
+	if (result_logs.size() == 1)
+		return result_logs[0];
 
 	// filter out suboptimal logs
 	vector<vector<int>> logs;
 
-	for (auto &log : g_logs)
+	// finding min amount steps
+	int min_steps = 2000;
+
+	for (auto &log : result_logs)
 	{
-		if (log.size() - 1 == Node::limit)
+		if (log.size() < min_steps)
+			min_steps = log.size();
+	}
+
+	for (auto &log : result_logs)
+	{
+		if (log.size() == min_steps)
 			logs.emplace_back(log);
 	}
 
-	// // debugging
-	// printLogs(logs);
-
-	for (int i = 0; i < Node::limit; i++)
+	for (int i = 0; i < min_steps; i++)
 	{
 		// getting tier based gain of log current step
 
@@ -735,12 +759,47 @@ vector<int> getOptimalLog()
 
 void addLog(vector<int> log)
 {
-	g_logs.emplace_back(log);
+	g_logs[g_log_pair[log.back()]].emplace_back(log);
+}
+
+void pairLogs()
+{
+	int i = 0;
+
+	g_log_pair.clear();
+	for (auto &recipe : g_recipes)
+	{
+		g_log_pair[recipe.first] = i;
+		i++;
+	}
+}
+
+void setLogsDepth()
+{
+	g_depths.clear();
+	for (auto &recipe : g_recipes)
+	{
+		g_depths[recipe.first] = getDepthLimit();
+	}
 }
 
 void initializeLogs()
 {
-	g_logs.reserve(LOG_COUNT);
+	vector<vector<int>> tmp;
+	
+	for (int i = 0; i < 5; i++)
+	{
+		g_logs.emplace_back(tmp);
+		g_logs[i].reserve(LOG_COUNT);
+	}
+}
+
+void clearLogs()
+{
+	for (auto &log : g_logs)
+	{
+		log.clear();
+	}
 }
 
 ////////////////////////////////////// STEPS  //////////////////////////////////////
@@ -762,7 +821,15 @@ public:
 	{
 		bool found_solution = false;
 
-		for (auto log : optimal_logs)
+		for (auto &recipe_logs : g_logs)
+		{
+			vector<int> optimal_log = getOptimalLog(recipe_logs);
+
+			if (!optimal_log.empty())
+				optimal_logs.emplace_back(optimal_log);
+		}
+
+		for (auto &log : optimal_logs)
 		{
 			if (!log.empty())
 			{
@@ -805,9 +872,9 @@ public:
 	float calculateRating(int price, int steps)
 	{
 		if (g_strategy[g_potions_brewed] == "fast" || g_strategy[g_potions_brewed] == "greedy")
-			return (float)price / steps;
+			return (float)price / (steps + 1);
 		else if (g_strategy[g_potions_brewed] == "power")
-			return pow(price, 2) / steps;
+			return pow(price, 2) / (steps + 1);
 	}
 
 	void getRating()
@@ -855,11 +922,11 @@ public:
 				if (recipe.second.id == output_log.front())
 				{
 					g_potions_brewed++;
-					if (g_strategy[g_potions_brewed] != "fast")
-					{
-						g_survey = true;
-						cerr << "Survey mode enabled." << endl;
-					}
+					// if (g_strategy[g_potions_brewed] != "fast")
+					// {
+					// 	g_survey = true;
+					// 	cerr << "Survey mode enabled." << endl;
+					// }
 					g_step = "BREW " + to_string(output_log.front());
 					return;
 				}
@@ -954,9 +1021,10 @@ public:
 		clearSaved();
 	}
 
-	void clearLogs() { optimal_logs.clear(); }
-
-	void addOptimalLog(vector<int> optimal_log) { optimal_logs.emplace_back(optimal_log); }
+	void clearLogs()
+	{ 
+		optimal_logs.clear(); 
+	}
 
 	void clearSaved()
 	{
@@ -970,81 +1038,53 @@ Steps g_steps;
 
 //////////////////////////////////////////////// SEARCHES /////////////////////////////////////////
 
-void printSearchResults(int search_count, Benchmark &bm)
+int getSurveyDepth()
 {
-	cerr << "Search " << search_count << " | ";
-	cerr << Node::nodes_searched << " nodes | " << bm.getResult() << " ms | ";
-	cerr << Node::target_hits << " hits at min. depth " << Node::limit << endl;
+	if (g_pure_survey)
+		return PURE_SURVEY_DEPTH;
+	if (g_strategy[g_potions_brewed] == "power")
+		return POWER_SURVEY_DEPTH;
+	else if (g_strategy[g_potions_brewed] == "greedy")
+		return GREEDY_SURVEY_DEPTH;
+	else if (g_strategy[g_potions_brewed] == "fast")
+		return FAST_SURVEY_DEPTH;
+
+	return 100;
+}
+
+int getDepthLimit()
+{
+	if (g_strategy[g_potions_brewed] == "power")
+		return POWER_DEPTH_LIMIT;
+	else if (g_strategy[g_potions_brewed] == "greedy")
+		return GREEDY_DEPTH_LIMIT;
+	else if (g_strategy[g_potions_brewed] == "fast")
+		return FAST_DEPTH_LIMIT;
 }
 
 void searchRecipes()
 {
 	map<int, vector<int>> search_targets;
-	vector<int> recipes_searched;
-	vector<int> optimal_log;
 
-	// benchmarking search
-	Benchmark bm;
+	pairLogs();
+	setLogsDepth();
 
 	if (!g_steps.saved_recipe.empty())
 		g_steps.checkSavedRecipeExist();
 
-	int search_count = 1;	
-
-	while (true)
+	for (auto &recipe : g_recipes)
+		search_targets[recipe.first] = recipe.second.getCost();
+	
+	try
 	{
-		search_targets.clear();
-		g_logs.clear();
-
-		for (auto recipe : g_recipes)
-		{
-			bool already_searched = false;
-			for (auto searched : recipes_searched)
-			{
-				if (recipe.first == searched)
-				{
-					already_searched = true;
-					break;
-				}
-			}
-			if (!already_searched)
-				search_targets[recipe.first] = recipe.second.getCost();
-		}
-		if (search_targets.empty())
-			break;
-		bm.startBenchmark();
-		try
-		{
-			Node root_node(g_inv, g_spells, search_targets, g_prune_depth);
-
-			// benchmark results
-			bm.endBenchmark();
-			printSearchResults(search_count, bm);
-
-			optimal_log = getOptimalLog();
-			if (optimal_log.empty())
-				break;
-			g_steps.addOptimalLog(optimal_log);
-			recipes_searched.emplace_back(optimal_log.back());
-		}
-		catch (char const *e)
-		{
-			// benchmark results
-			bm.endBenchmark();
-			printSearchResults(search_count, bm);
-
-			g_solutions_found += Node::target_hits;
-			g_nodes_searched += Node::nodes_searched;
-
-			optimal_log = getOptimalLog();
-			if (optimal_log.empty())
-				break;
-			g_steps.addOptimalLog(optimal_log);
-			recipes_searched.emplace_back(optimal_log.back());
-			break;
-		}
-		search_count++;
+		Node root_node(g_inv, g_spells, search_targets, getDepthLimit(), getSurveyDepth());
 	}
+	catch (char const *e)
+	{
+		g_solutions_found += Node::target_hits;
+		g_nodes_searched += Node::nodes_searched;
+	}
+	cerr << "Time when terminated search: " << Timer::getTime() << endl;
 	g_steps.getStep();
 }
 
@@ -1074,7 +1114,7 @@ bool hasSpecial()
 {
 	for (auto tome : g_tomes)
 	{
-		if (tome.second.special)
+		if (tome.second.special && tome.second.tax_cost <= MAX_TAX_COST)
 			return true;
 	}
 	return false;
@@ -1084,7 +1124,7 @@ int getSpecial()
 {
 	for (auto tome : g_tomes)
 	{
-		if (tome.second.special)
+		if (tome.second.special && tome.second.tax_cost <= MAX_TAX_COST)
 			return tome.first;
 	}
 	return -1;
@@ -1117,20 +1157,10 @@ int getOptimalFreeloader()
 	return ret;
 }
 
-////////////////////////////////////// HIGH LEVEL CONTROL FLOW ///////////////////////////////////
+////////////////////////////////////// CONTROL FLOW ///////////////////////////////////
 
 void decideAction()
 {
-	if (hasSpecial())
-	{
-		int tome_id = getSpecial();
-		if (g_tomes[tome_id].haveRequiredStones(g_inv))
-		{
-			g_steps.clearSaved();
-			cout << "LEARN " << tome_id << endl;
-			return;
-		}
-	}
 	if (g_spells.size() < MAX_SPELLS)
 	{
 		searchRecipes();
@@ -1139,14 +1169,22 @@ void decideAction()
 			int tome_id = getOptimalFreeloader();
 			if (g_tomes[tome_id].haveRequiredStones(g_inv))
 			{
-				cout << "LEARN " << tome_id << endl;
 				g_steps.clearSaved();
+				cout << "LEARN " << tome_id << endl;
+				return;
 			}
-			else
-				cout << "LEARN " << getFreeTome() << endl;
 		}
-		else
-			cout << "LEARN " << getFreeTome() << endl;
+		if (hasSpecial())
+		{
+			int tome_id = getSpecial();
+			if (g_tomes[tome_id].haveRequiredStones(g_inv))
+			{
+				g_steps.clearSaved();
+				cout << "LEARN " << tome_id << endl;
+				return;
+			}
+		}
+		cout << "LEARN " << getFreeTome() << endl;
 	}
 	else
 	{
@@ -1157,8 +1195,40 @@ void decideAction()
 	}
 }
 
-void toggleSurvey(int &survey_state)
+////////////////////////////////////// MAIN ///////////////////////////////////
+
+
+void initializationsOnce()
 {
+	srand(time(0));
+	initializeNodes();
+	initializeLogs();
+	initializeStrategy();
+
+	g_potions_brewed = 0;
+	g_turn = 1;
+}
+
+void turnResets()
+{
+	g_solutions_found = 0;
+	g_nodes_searched = 0;
+	g_steps.clearLogs();
+	clearLogs();
+}
+
+void testStuff()
+{
+	// testInput();
+	// benchmarkCycles(50);
+	// benchmarkAllRecipes();
+	// printData();
+}
+
+void toggleSurvey()
+{
+	static int survey_state = 0;
+
 	if (g_spells.size() >= MAX_SPELLS && g_survey)
 	{
 		if (survey_state == 1)
@@ -1172,235 +1242,26 @@ void toggleSurvey(int &survey_state)
 	}
 }
 
+void turnSummary()
+{
+	cerr << "Turn " << g_turn << " | " << Timer::getTime() << " ms | " << g_nodes_searched << " nodes | " << g_solutions_found << " solutions " << endl;
+	cerr << "Strategy [" << g_strategy[g_potions_brewed] << "]" << endl;
+	g_turn++;
+}
+
 int main()
 {
-	initializeNodes();
-	initializeLogs();
-	initializeStrategy();
-
-	g_potions_brewed = 0;
-	g_prune_depth = SURVEY_DEPTH;
-	g_turn = 1;
-
-	srand(time(0));
-
-	int survey_state = 0;
+	initializationsOnce();
 
 	while (true)
 	{
-		// cleaning data
-		g_solutions_found = 0;
-		g_nodes_searched = 0;
-		g_steps.clearLogs();
-
-		// /// benchmarking ///
-		// testInput();
-		// // //benchmarkCycles(50);
-		// benchmarkAllRecipes();
-
-		/// debugging ///
-		//printData();
-
-		/// live input ///
+		turnResets();
 		processInput();
-
-		toggleSurvey(survey_state);
-
+		//toggleSurvey();
 		Timer::setTimer();
 		decideAction();
-
-		cerr << "Turn " << g_turn << " | " << Timer::getTime() << " ms | " << g_nodes_searched << " nodes | " << g_solutions_found << " solutions " << endl;
-
-		g_turn++;
+		turnSummary();
 	}
-}
-
-//////////////////////////////////////////////// BENCHMARK /////////////////////////////////////////
-
-// void benchmarkAllRecipes()
-// {
-// 	map<int, vector<int>> search_targets;
-// 	vector<vector<int>> optimal_logs;
-// 	vector<int> recipes_searched;
-// 	vector<int> optimal_log;
-
-// 	Benchmark bm;
-// 	bm.startBenchmark();
-// 	g_timer = Timer();
-
-// 	while (!g_timer.endOfTurn())
-// 	{
-// 		search_targets.clear();
-// 		g_logs.clear();
-
-// 		for (auto recipe : g_recipes)
-// 		{
-// 			bool already_searched = false;
-// 			for (auto searched : recipes_searched)
-// 			{
-// 				if (recipe.first == searched)
-// 				{
-// 					already_searched = true;
-// 					break;
-// 				}
-// 			}
-// 			if (!already_searched)
-// 				search_targets[recipe.first] = recipe.second.getCost();
-// 		}
-// 		if (search_targets.empty())
-// 			break;
-// 		Node root_node(g_inv, g_spells, search_targets);
-// 		// cerr << "exited at " << g_timer.getResult() << " ms." << endl;
-// 		optimal_log = getOptimalLog();
-// 		if (optimal_log.empty())
-// 			break;
-// 		optimal_logs.emplace_back(optimal_log);
-// 		recipes_searched.emplace_back(optimal_log.back());
-// 	}
-// 	// bm.endBenchmark();
-// 	// bm.printResult();
-// 	getStep(optimal_logs);
-// }
-
-// void benchmarkCycles(int cycles)
-// {
-// 	map<int, vector<int>> search_targets;
-// 	for (auto recipe : g_recipes)
-// 		search_targets[recipe.first] = recipe.second.getCost();
-
-// 	Benchmark bm;
-// 	bm.startBenchmark();
-
-// 	for (int i = 0; i < cycles; i++)
-// 	{
-// 		Node root_node(g_inv, g_spells, search_targets);
-// 	}
-// 	bm.endBenchmark();
-// 	cout << "Search time (mean): " << bm.getResult() / cycles << endl;
-// }
-
-//////////////////////////////////////////////// DEBUG /////////////////////////////////////////
-
-void printOptimalLog(vector<int> result)
-{
-	if (result.empty())
-	{
-		cerr << "No results." << endl;
-		return;
-	}
-	if (result.size() == 1)
-	{
-		cerr << "All ingredients for action " << result.back() << " are available." << endl;
-		return;
-	}
-	cerr << "Action " << result.back() << " in " << result.size() - 1 << " step(s): ";
-	for (auto step : result)
-	{
-		if (step == result.back())
-			continue;
-		if (step != NODE_REST)
-			cerr << step;
-		else
-			cerr << "REST";
-		cerr << ", ";
-	}
-	cerr << endl;
-}
-
-void printLogs(vector<vector<int>> results)
-{
-	for (auto log : results)
-	{
-		cerr << "Action " << log.back() << " in " << log.size() - 1 << " step(s): ";
-		for (auto step : log)
-		{
-			if (step == log.back())
-				continue;
-			if (step != NODE_REST)
-				cerr << step;
-			else
-				cerr << "REST";
-			cerr << ", ";
-		}
-		cerr << endl;
-	}
-}
-
-void printSpells()
-{
-	cerr << "-------------SPELLS-------------" << endl;
-	for (auto spell : g_spells)
-	{
-		cerr << "spell " << spell.first << " [";
-		for (int i = 0; i < 4; i++)
-		{
-			cerr << spell.second.stones[i];
-			(i == 3) ? cerr << "]" << endl : cerr << ", ";
-		}
-	}
-}
-
-void printTomes()
-{
-	cerr << "-------------TOMES-------------" << endl;
-	for (auto tome : g_tomes)
-	{
-		cerr << "tome " << tome.first << " [";
-		for (int i = 0; i < 4; i++)
-		{
-			cerr << tome.second.stones[i];
-			(i == 3) ? cerr << "]" : cerr << ", ";
-		}
-		if (tome.second.freeloader)
-			cerr << " - freeloader";
-		cerr << endl;
-	}
-}
-
-void printRecipes()
-{
-	cerr << "-------------RECIPES-------------" << endl;
-	for (auto recipe : g_recipes)
-	{
-		cerr << "recipe " << recipe.first << " [";
-		for (int i = 0; i < 4; i++)
-		{
-			cerr << recipe.second.stones[i];
-			(i == 3) ? cerr << "]" : cerr << ", ";
-		}
-		cerr << " - rating " << recipe.second.rating << " - steps " << recipe.second.steps << " - " << recipe.second.price << " rupees" << endl;
-	}
-}
-
-void printData()
-{
-	printRecipes();
-	//printTomes();
-	printSpells();
-}
-
-/////////////////////////////////// TEST INPUT ///////////////////////////////////
-
-void testInput()
-{
-	g_recipes.insert({60, Recipe(0, 0, -5, 0, 60, 16)});
-	g_recipes.insert({62, Recipe(0, -2, 0, -3, 62, 19)});
-	g_recipes.insert({72, Recipe(0, -2, -2, -2, 72, 19)});
-	g_recipes.insert({74, Recipe(-3, -1, -1, -1, 74, 14)});
-	g_recipes.insert({75, Recipe(-1, -3, -1, -1, 75, 16)});
-
-	g_spells.insert({78, Spell(2, 0, 0, 0, 78, true, false)});
-	g_spells.insert({79, Spell(-1, 1, 0, 0, 79, true, false)});
-	g_spells.insert({80, Spell(0, -1, 1, 0, 80, true, false)});
-	g_spells.insert({81, Spell(0, 0, -1, 1, 81, true, false)});
-	g_spells.insert({86, Spell(1, 1, 0, 0, 86, true, false)});
-	g_spells.insert({88, Spell(3, -2, 1, 0, 88, true, true)});
-	g_spells.insert({90, Spell(4, 0, 0, 0, 90, true, false)});
-	g_spells.insert({92, Spell(2, 3, -2, 0, 92, true, true)});
-	g_spells.insert({94, Spell(0, 2, -1, 0, 94, true, true)});
-	g_spells.insert({96, Spell(-4, 0, 2, 0, 96, true, true)});
-	g_spells.insert({98, Spell(0, -3, 0, 2, 98, true, true)});
-	g_spells.insert({100, Spell(2, 1, -2, 1, 100, true, true)});
 }
 
 /////////////////////////////////// INPUT & INITIALIZATIONS ///////////////////////////////////

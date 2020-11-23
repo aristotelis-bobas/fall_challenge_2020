@@ -24,16 +24,19 @@
 #include <cmath>
 #include <cstdlib>
 
-#define DEPTH_LIMIT 10
-#define SURVEY_DEPTH 6
+#define DEPTH_LIMIT 8
+#define PRUNING_DEPTH 6
+
+#define EXPLORATION_DEPTH_LIMIT 12
+#define EXPLORATION_PRUNING_DEPTH 6
 
 #define MAX_SPELLS 11
 #define MAX_TAX_COST 1
-#define TIMER_CUTOFF 47
+#define TIMER 45
 
-#define NODE_REST 777
-#define NODE_COUNT 90000
-#define LOG_COUNT 10000
+#define REST 777
+#define NODE_COUNT 50000
+#define LOG_COUNT 1000
 
 #define TIER_1_VALUE 1
 #define TIER_2_VALUE 2
@@ -45,25 +48,9 @@ using namespace std::chrono;
 
 void processInput();
 int getFreeTome();
-void printOptimalLog(vector<int> result);
-void printLogs(vector<vector<int>> results);
-void testInput();
-void benchmarkCycles(int cycles);
-void benchmarkAllRecipes();
-
-////////////////////////////////////// STRATEGY ///////////////////////////////////
-
-map<int, string> g_strategy;
-
-void initializeStrategy()
-{
-	g_strategy.insert({0, "fast"});
-	g_strategy.insert({1, "fast"});
-	g_strategy.insert({2, "fast"});
-	g_strategy.insert({3, "fast"});
-	g_strategy.insert({4, "fast"});
-	g_strategy.insert({5, "fast"});
-}
+void addLog(vector<int> log);
+int getDepthLimit();
+class Action;
 
 ////////////////////////////////////// CLASSES ///////////////////////////////////
 
@@ -95,7 +82,7 @@ public:
 	static void checkEndOfTurn()
 	{
 		Timer::time_span = duration<double, std::milli>(high_resolution_clock::now() - Timer::start);
-		if (Timer::time_span.count() >= TIMER_CUTOFF)
+		if (Timer::time_span.count() >= TIMER)
 			throw "Timer went off.";
 	}
 	static double getTime()
@@ -131,8 +118,9 @@ struct Stones
 	}
 };
 
-struct Inventory : public Stones
+class Inventory : public Stones
 {
+public:
 	int score;
 	int slots_filled;
 
@@ -154,6 +142,24 @@ struct Inventory : public Stones
 		for (int i = 0; i < 4; i++)
 			stones[i] = rhs.stones[i];
 		return *this;
+	}
+
+	template <typename Action>
+	void mutateInventory(const Action &action, int mult = 1)
+	{
+		for (int i = 0; i < 4; i++)
+		{
+			if (action.stones[i] < 0)
+				stones[i] -= mult * abs(action.stones[i]);
+			if (action.stones[i] > 0)
+				stones[i] += mult * action.stones[i];
+		}
+		slots_filled = 0;
+		for (int i = 0; i < 4; i++)
+		{
+			if (stones[i] > 0)
+				slots_filled += stones[i];
+		}
 	}
 };
 
@@ -364,7 +370,9 @@ public:
 class Node;
 
 vector<Node> g_nodes;
-vector<vector<int>> g_logs;
+vector<vector<vector<int>>> g_logs;
+map<int, int> g_depths;
+map<int, int> g_log_pair;
 map<int, Recipe> g_recipes;
 map<int, Tome> g_tomes;
 map<int, Spell> g_spells;
@@ -374,10 +382,11 @@ int enemy_score;
 int g_nodes_searched;
 int g_solutions_found;
 int g_potions_brewed;
-int g_prune_depth;
 int g_turn;
-bool g_survey = true;
-bool g_pure_survey = true;
+
+bool g_early_exploration;
+bool g_pre_completion_exploration;
+bool g_post_completion_exploration = false;
 
 ////////////////////////////////////// SPELL UTILITIES  //////////////////////////////////////
 
@@ -422,26 +431,26 @@ public:
 	int depth;
 	int option_count;
 	vector<int> options;
-	map<int, int> repeats;
+	multimap<int, int> repeats;
 	bool rest_option = false;
 
 	/// class state
 	static map<int, vector<int>> targets;
 	static int limit;
-	static int depth_cutoff;
+	static int prune_depth;
 	static int nodes_searched;
 	static int target_hits;
 	static int limit_hits;
 
 	// root_node constructor
-	Node(Inventory start_inv, map<int, Spell> search_spells, map<int, vector<int>> search_targets, int cutoff)
+	Node(Inventory start_inv, map<int, Spell> search_spells, map<int, vector<int>> search_targets, int depth_limit, int prune)
 	{
 		// initialize class state
 		Node::targets = search_targets;
-		Node::limit = DEPTH_LIMIT;
+		Node::limit = depth_limit;
 		Node::nodes_searched = 0;
 		Node::target_hits = 0;
-		Node::depth_cutoff = cutoff;
+		Node::prune_depth = prune;
 
 		// initialize object state
 		inv = {start_inv.stones[0], start_inv.stones[1], start_inv.stones[2], start_inv.stones[3], start_inv.slots_filled};
@@ -449,8 +458,7 @@ public:
 			spells[spell.first] = spell.second.avail;
 		depth = 0;
 
-		if (targetHit())
-			return;
+		targetHit();
 		getOptions();
 		increaseDepth();
 
@@ -471,7 +479,7 @@ public:
 	}
 
 	// fill recycled Node with appropiate info
-	void createChildNode(array<int, 5> mutated_inv, map<int, bool> mutated_spells, vector<int> mutated_log, int mutated_depth)
+	void createChildNode(array<int, 5> &&mutated_inv, map<int, bool> &&mutated_spells, vector<int> &&mutated_log, int mutated_depth)
 	{
 		cleanNode();
 
@@ -481,27 +489,24 @@ public:
 		log = mutated_log;
 		depth = mutated_depth;
 
-		// end of chain conditions
-		if (targetHit())
-			return;
+		targetHit();
 		Timer::checkEndOfTurn();
 		if (limitHit())
 			return;
 
-		// expansion mechanics
 		getOptions();
 		increaseDepth();
 	}
 
 	void increaseDepth()
 	{
-		for (auto spell : repeats)
+		for (auto &spell : repeats)
 		{
 			g_nodes[Node::nodes_searched].createChildNode(mutatedInventory(spell.first, spell.second), mutatedSpells(spell.first), mutatedLog(spell.first * spell.second), depth + 1);
 		}
-		for (auto spell_id : options)
+		for (auto &spell_id : options)
 		{
-			if (g_survey && depth >= Node::depth_cutoff)
+			if (depth >= Node::prune_depth)
 			{
 				if (nodePruned())
 					continue;
@@ -512,28 +517,31 @@ public:
 		{
 			map<int, bool> mutated_spells = spells;
 			mutateSpellAvailability(mutated_spells);
-
-			g_nodes[Node::nodes_searched].createChildNode(inv, mutated_spells, mutatedLog(NODE_REST), depth + 1);
+			g_nodes[Node::nodes_searched].createChildNode(std::move(inv), std::move(mutated_spells), mutatedLog(REST), depth + 1);
 		}
 	}
 
 	void getOptions()
 	{
-		for (auto &spell : spells)
+		for (auto it = spells.rbegin(); it != spells.rend(); it++)
 		{
-			if (g_spells[spell.first].haveRequiredStones(inv) && !g_spells[spell.first].willOverflowInventory(inv) && spell.second)
-				options.push_back(spell.first);
-			if (g_spells[spell.first].repeat && spell.second)
+			if (g_spells[it->first].haveRequiredStones(inv) && !g_spells[it->first].willOverflowInventory(inv) && it->second)
+			{
+				options.push_back(it->first);
+			}
+			if (g_spells[it->first].repeat && it->second)
 			{
 				for (int mult = 2; mult < 5; mult++)
 				{
-					if (g_spells[spell.first].haveRequiredStones(inv, mult) && !g_spells[spell.first].willOverflowInventory(inv, mult))
-						repeats.insert({spell.first, mult});
+					if (g_spells[it->first].haveRequiredStones(inv, mult) && !g_spells[it->first].willOverflowInventory(inv, mult))
+						repeats.insert({it->first, mult});
 					else
+					{
 						break;
+					}
 				}
 			}
-			if (!rest_option && !spell.second)
+			if (!rest_option && !it->second)
 				rest_option = true;
 		}
 		option_count = options.size() + repeats.size();
@@ -544,17 +552,7 @@ public:
 	// eliminating options to search deeper in shorter time
 	bool nodePruned()
 	{
-		if (rand() % 3 == 0)
-			return false;
-		return true;
-	}
-
-	// turn based or game limits //
-	bool capacityHit()
-	{
-		if (Node::nodes_searched + 1 > NODE_COUNT)
-			return true;
-		if (Node::target_hits + 1 > LOG_COUNT)
+		if (rand() % 4 == 0)
 			return true;
 		return false;
 	}
@@ -566,49 +564,43 @@ public:
 		return false;
 	}
 
-	bool targetHit()
+	void targetHit()
 	{
-		bool solved = false;
+		int matches;
 
 		for (auto &target : targets)
 		{
-			int match = 0;
+			matches = 0;
 			for (int i = 0; i < 4; i++)
 			{
 				if (inv[i] < target.second[i])
 					break;
 				else
-					match++;
+					matches++;
 			}
-			if (match == 4)
+			if (matches == 4)
 			{
-				log.emplace_back(target.first);
-				g_logs.emplace_back(log);
-				solved = true;
-				break;
+				if (depth <= g_depths[target.first])
+				{
+					g_depths[target.first] = depth;
+					Node::target_hits++;
+					vector<int> tmp = log;
+					tmp.emplace_back(target.first);
+					addLog(tmp);
+				}
 			}
 		}
-		if (!solved)
-			return false;
-		if (depth < Node::limit)
-			Node::limit = depth;
-		Node::target_hits++;
-		return true;
 	}
 
 	array<int, 5> mutatedInventory(int spell_id, int mult = 1)
 	{
 		array<int, 5> tmp = inv;
-
-		/// reset filled slots
 		tmp[4] = 0;
-
 		for (int i = 0; i < 4; i++)
 		{
 			(g_spells[spell_id].stones[i] <= 0) ? tmp[i] -= mult * abs(g_spells[spell_id].stones[i]) : tmp[i] += mult * g_spells[spell_id].stones[i];
 			tmp[4] += tmp[i];
 		}
-
 		return tmp;
 	}
 
@@ -638,7 +630,7 @@ map<int, vector<int>> Node::targets;
 int Node::limit;
 int Node::nodes_searched;
 int Node::target_hits;
-int Node::depth_cutoff;
+int Node::prune_depth;
 
 void initializeNodes()
 {
@@ -656,34 +648,39 @@ void initializeNodes()
 
 ////////////////////////////////////// LOGS  //////////////////////////////////////
 
-/// gets optimal log from the previous search
 /// retrieves all minimum step options and finds the most gain (based on ingredient tier) / step option
 
-vector<int> getOptimalLog()
+vector<int> getOptimalLog(vector<vector<int>> result_logs)
 {
 	vector<int> result;
 
 	// no solutions
-	if (g_logs.empty())
+	if (result_logs.empty())
 		return result;
 
 	// only 1 solution
-	if (g_logs.size() == 1)
-		return g_logs[0];
+	if (result_logs.size() == 1)
+		return result_logs[0];
 
 	// filter out suboptimal logs
 	vector<vector<int>> logs;
 
-	for (auto &log : g_logs)
+	// finding min amount steps
+	int min_steps = 2000;
+
+	for (auto &log : result_logs)
 	{
-		if (log.size() - 1 == Node::limit)
+		if (log.size() < min_steps)
+			min_steps = log.size();
+	}
+
+	for (auto &log : result_logs)
+	{
+		if (log.size() == min_steps)
 			logs.emplace_back(log);
 	}
 
-	// // debugging
-	// printLogs(logs);
-
-	for (int i = 0; i < Node::limit; i++)
+	for (int i = 0; i < min_steps; i++)
 	{
 		// getting tier based gain of log current step
 
@@ -691,11 +688,16 @@ vector<int> getOptimalLog()
 
 		for (int y = 0; y < logs.size(); y++)
 		{
-			if (logs[y][i] == NODE_REST)
+			if (logs[y][i] == REST)
 				gains.emplace_back(0);
 			else if (isRepeatingSpell(logs[y][i]))
 			{
 				pair<int, int> instruction = getRepeatingSpell(logs[y][i]);
+				if (instruction.first == 0)
+				{
+					gains.emplace_back(0);
+					continue;
+				}
 				gains.emplace_back(g_spells[instruction.first].tier_based_nett * instruction.second);
 			}
 			else
@@ -735,12 +737,47 @@ vector<int> getOptimalLog()
 
 void addLog(vector<int> log)
 {
-	g_logs.emplace_back(log);
+	g_logs[g_log_pair[log.back()]].emplace_back(log);
+}
+
+void pairLogs()
+{
+	int i = 0;
+
+	g_log_pair.clear();
+	for (auto &recipe : g_recipes)
+	{
+		g_log_pair[recipe.first] = i;
+		i++;
+	}
+}
+
+void setLogsDepth()
+{
+	g_depths.clear();
+	for (auto &recipe : g_recipes)
+	{
+		g_depths[recipe.first] = getDepthLimit();
+	}
 }
 
 void initializeLogs()
 {
-	g_logs.reserve(LOG_COUNT);
+	vector<vector<int>> tmp;
+
+	for (int i = 0; i < 5; i++)
+	{
+		g_logs.emplace_back(tmp);
+		g_logs[i].reserve(LOG_COUNT);
+	}
+}
+
+void clearLogs()
+{
+	for (auto &log : g_logs)
+	{
+		log.clear();
+	}
 }
 
 ////////////////////////////////////// STEPS  //////////////////////////////////////
@@ -750,64 +787,51 @@ class Steps
 public:
 	vector<vector<int>> optimal_logs;
 	vector<int> output_log;
-	map<int, string> strategy;
 
 	float saved_rating;
 	vector<int> saved_recipe;
 	Inventory saved_inv;
 
+	bool empty;
+
 	Steps() {}
 
-	void getStep()
+	void checkEmpty()
 	{
-		bool found_solution = false;
-
-		for (auto log : optimal_logs)
+		for (auto &log : optimal_logs)
 		{
 			if (!log.empty())
 			{
-				found_solution = true;
-				break;
+				empty = false;
+				return;
 			}
 		}
-		if (!found_solution)
-		{
-			getFreeStep();
-			return;
-		}
-
-		if (g_strategy[g_potions_brewed] == "fast")
-			fastStrategy();
-		else
-			getRating();
+		empty = true;
 	}
 
-	void fastStrategy()
+	void processLogs()
 	{
-		vector<vector<int>> quickest_logs;
-		int smallest = 2000;
+		for (auto &recipe_logs : g_logs)
+		{
+			vector<int> optimal_log = getOptimalLog(recipe_logs);
 
-		for (auto &log : optimal_logs)
-		{
-			if (log.size() < smallest)
-				smallest = log.size();
-		}
-		for (auto log : optimal_logs)
-		{
-			if (log.size() == smallest)
-				quickest_logs.emplace_back(log);
+			if (!optimal_log.empty())
+				optimal_logs.emplace_back(optimal_log);
 		}
 
-		optimal_logs = quickest_logs;
-		getRating();
+		checkEmpty();
+		if (!empty)
+			getRating();
 	}
 
 	float calculateRating(int price, int steps)
 	{
-		if (g_strategy[g_potions_brewed] == "fast" || g_strategy[g_potions_brewed] == "greedy")
-			return (float)price / steps;
-		else if (g_strategy[g_potions_brewed] == "power")
-			return pow(price, 2) / steps;
+		// if (g_potions_brewed < 2)
+		// 	return (float)price / steps;
+		// else
+		// 	return (float)price / pow(steps, g_potions_brewed);
+
+		return pow(price, 2) / (steps + 1);
 	}
 
 	void getRating()
@@ -827,7 +851,7 @@ public:
 		{
 			int recipe_id = recipe.back();
 			ratings[recipe_id] = calculateRating(g_recipes[recipe_id].price, recipe.size());
-			cerr << "Recipe " << recipe_id << " | " << ratings[recipe_id] <<  " | " << g_recipes[recipe_id].price << " gold | " << recipe.size() << " steps" << endl;
+			cerr << "Recipe " << recipe_id << " | " << ratings[recipe_id] << " | " << g_recipes[recipe_id].price << " gold | " << recipe.size() << " steps" << endl;
 		}
 		for (auto rating : ratings)
 		{
@@ -838,16 +862,24 @@ public:
 			}
 		}
 
+		cerr << "=======================================" << endl;
+		if (!saved_recipe.empty())
+			cerr << "Saved recipe " << saved_recipe.back() << " | " << saved_rating << " | " << g_recipes[saved_recipe.back()].price << " gold | " << saved_recipe.size() << " steps" << endl;
+
 		output_log = recipes[best_recipe];
 		checkSavedSteps(best_recipe, best_rating);
 		saveBestSteps();
-		cerr << "=======================================" << endl;
 		cerr << "Target recipe " << best_recipe << " | " << best_rating << " | " << g_recipes[best_recipe].price << " gold | " << output_log.size() << " steps" << endl;
-		setOutput();
+		cerr << "=======================================" << endl;
 	}
 
 	void setOutput()
 	{
+		if (empty)
+		{
+			getFreeStep();
+			return;
+		}
 		if (output_log.size() == 1)
 		{
 			for (auto &recipe : g_recipes)
@@ -855,11 +887,8 @@ public:
 				if (recipe.second.id == output_log.front())
 				{
 					g_potions_brewed++;
-					if (g_strategy[g_potions_brewed] != "fast")
-					{
-						g_survey = true;
-						cerr << "Survey mode enabled." << endl;
-					}
+					// g_post_completion_exploration = true;
+					// cerr << "Post completion exploration enabled" << endl;
 					g_step = "BREW " + to_string(output_log.front());
 					return;
 				}
@@ -873,7 +902,7 @@ public:
 				}
 			}
 		}
-		else if (output_log.front() == NODE_REST)
+		else if (output_log.front() == REST)
 		{
 			g_step = "REST";
 			return;
@@ -892,7 +921,7 @@ public:
 
 	void getFreeStep()
 	{
-		for (auto &spell : g_spells)
+		for (auto spell : g_spells)
 		{
 			if (spell.second.haveRequiredStones(g_inv) && spell.second.avail && !spell.second.willOverflowInventory(g_inv))
 			{
@@ -900,24 +929,29 @@ public:
 				return;
 			}
 		}
-		g_step = "LEARN " + to_string(getFreeTome());
+		g_step = "REST";
 	}
 
 	void checkSavedSteps(int &best_recipe, float &best_rating)
 	{
-		//debugging
-		// cerr << "Saved best_rating: " << saved_rating << endl;
-		// cerr << "Found best_rating: " << best_rating << endl;
-
+		if (g_pre_completion_exploration)
+		{
+			// save mutated inventory state before wipe
+			Inventory tmp = g_inv;
+			tmp.mutateInventory(g_recipes[saved_recipe.front()]);
+			clearSaved();
+			g_inv = tmp;
+			return;
+		}
 		if (!saved_recipe.empty())
 		{
-			if (g_pure_survey && g_inv != saved_inv)
+			if (g_inv != saved_inv)
 			{
-				cerr << "Inventory has changed. Discarded saved steps." << endl;
+				cerr << "Inventory has changed; discarded saved steps" << endl;
 				clearSaved();
 				return;
 			}
-			if (best_rating <= saved_rating)
+			if (best_rating < saved_rating)
 			{
 				output_log = saved_recipe;
 				best_recipe = output_log.back();
@@ -930,13 +964,34 @@ public:
 	{
 		if (output_log.size() > 1)
 		{
-			if (!g_pure_survey)
+			// saving steps
+
+			if (!g_early_exploration && !g_pre_completion_exploration)
 				saved_recipe = vector<int>(output_log.begin() + 1, output_log.end());
-			else if (g_pure_survey)
-			{
+			else
 				saved_recipe = output_log;
+
+			// saving inventory state
+
+			if (g_early_exploration)
 				saved_inv = g_inv;
+			else if (!g_pre_completion_exploration)
+			{
+				saved_inv = g_inv;
+				if (output_log.front() != REST)
+				{
+					if (isRepeatingSpell(output_log.front()))
+					{
+						pair<int, int> instruction = getRepeatingSpell(output_log.front());
+						if (instruction.first != 0)
+							saved_inv.mutateInventory(g_spells[instruction.first], instruction.second);
+					}
+					else
+						saved_inv.mutateInventory(g_spells[output_log.front()]);
+				}
 			}
+
+			// saving rating
 			saved_rating = calculateRating(g_recipes[saved_recipe.back()].price, saved_recipe.size());
 		}
 		else
@@ -950,13 +1005,14 @@ public:
 			if (recipe.second.id == saved_recipe.back())
 				return;
 		}
-		cerr << "Saved recipe brewed by opponent." << endl;
+		cerr << "Saved recipe brewed by opponent" << endl;
 		clearSaved();
 	}
 
-	void clearLogs() { optimal_logs.clear(); }
-
-	void addOptimalLog(vector<int> optimal_log) { optimal_logs.emplace_back(optimal_log); }
+	void clearLogs()
+	{
+		optimal_logs.clear();
+	}
 
 	void clearSaved()
 	{
@@ -970,82 +1026,128 @@ Steps g_steps;
 
 //////////////////////////////////////////////// SEARCHES /////////////////////////////////////////
 
-void printSearchResults(int search_count, Benchmark &bm)
+int getDepthLimit()
 {
-	cerr << "Search " << search_count << " | ";
-	cerr << Node::nodes_searched << " nodes | " << bm.getResult() << " ms | ";
-	cerr << Node::target_hits << " hits at min. depth " << Node::limit << endl;
+	if (g_early_exploration || g_pre_completion_exploration || g_post_completion_exploration)
+		return EXPLORATION_DEPTH_LIMIT;
+	else
+		return DEPTH_LIMIT;
 }
 
-void searchRecipes()
+int getPruneDepth()
+{
+	if (g_early_exploration || g_pre_completion_exploration || g_post_completion_exploration)
+		return EXPLORATION_PRUNING_DEPTH;
+	else
+		return PRUNING_DEPTH;
+}
+
+bool earlyExploration()
+{
+	if (g_spells.size() < MAX_SPELLS - 4)
+	{
+		g_early_exploration = false;
+		return false;
+	}
+	if (g_spells.size() >= MAX_SPELLS - 4 && g_spells.size() < MAX_SPELLS)
+	{
+		cerr << "Early exploration enabled" << endl;
+		g_early_exploration = true;
+	}
+	else
+		g_early_exploration = false;
+	return true;
+}
+
+void checkCompletion()
+{
+	if (g_steps.saved_recipe.size() != 1)
+	{
+		if (g_pre_completion_exploration)
+			cerr << "Pre completion exploration disabled" << endl;
+		g_pre_completion_exploration = false;
+		return;
+	}
+	cerr << "Pre completion exploration enabled" << endl;
+	g_pre_completion_exploration = true;
+	g_potions_brewed++;
+	g_step = "BREW " + to_string(g_steps.saved_recipe.front());
+}
+
+Inventory getInventory()
+{
+	if (!g_pre_completion_exploration)
+		return g_inv;
+
+	Inventory tmp = g_inv;
+	int recipe_id = g_steps.saved_recipe.front();
+	tmp.mutateInventory(g_recipes[recipe_id]);
+
+	return tmp;
+}
+
+void explorationLogic()
+{
+	// // disable post completion exploration after 1 cycle
+	// if (g_post_completion_exploration)
+	// {
+	// 	cerr << "Post completion exploration disabled" << endl;
+	// 	g_post_completion_exploration = false;
+	// }
+
+	// main output set elsewhere
+	if (!g_early_exploration && !g_pre_completion_exploration)
+		g_steps.setOutput();
+
+	// // enable post completion exploration here when saved recipe is brewed, otherwise in setOutput()
+	// if (g_pre_completion_exploration)
+	// {
+	// 	cerr << "Post completion exploration enabled" << endl;
+	// 	g_post_completion_exploration = true;
+	// }
+}
+
+void launchSearch()
 {
 	map<int, vector<int>> search_targets;
-	vector<int> recipes_searched;
-	vector<int> optimal_log;
 
-	// benchmarking search
-	Benchmark bm;
+	if (!earlyExploration())
+	{
+		cerr << "Not yet time to search." << endl;
+		return;
+	}
 
 	if (!g_steps.saved_recipe.empty())
 		g_steps.checkSavedRecipeExist();
 
-	int search_count = 1;	
+	if (!g_steps.saved_recipe.empty())
+		checkCompletion();
 
-	while (true)
+	pairLogs();
+	setLogsDepth();
+
+	for (auto &recipe : g_recipes)
 	{
-		search_targets.clear();
-		g_logs.clear();
-
-		for (auto recipe : g_recipes)
+		if (g_pre_completion_exploration)
 		{
-			bool already_searched = false;
-			for (auto searched : recipes_searched)
-			{
-				if (recipe.first == searched)
-				{
-					already_searched = true;
-					break;
-				}
-			}
-			if (!already_searched)
-				search_targets[recipe.first] = recipe.second.getCost();
+			if (recipe.first == g_steps.saved_recipe.front())
+				continue;
 		}
-		if (search_targets.empty())
-			break;
-		bm.startBenchmark();
-		try
-		{
-			Node root_node(g_inv, g_spells, search_targets, g_prune_depth);
-
-			// benchmark results
-			bm.endBenchmark();
-			printSearchResults(search_count, bm);
-
-			optimal_log = getOptimalLog();
-			if (optimal_log.empty())
-				break;
-			g_steps.addOptimalLog(optimal_log);
-			recipes_searched.emplace_back(optimal_log.back());
-		}
-		catch (char const *e)
-		{
-			// benchmark results
-			bm.endBenchmark();
-			printSearchResults(search_count, bm);
-
-			g_solutions_found += Node::target_hits;
-			g_nodes_searched += Node::nodes_searched;
-
-			optimal_log = getOptimalLog();
-			if (optimal_log.empty())
-				break;
-			g_steps.addOptimalLog(optimal_log);
-			recipes_searched.emplace_back(optimal_log.back());
-			break;
-		}
-		search_count++;
+		search_targets[recipe.first] = recipe.second.getCost();
 	}
-	g_steps.getStep();
+
+	try
+	{
+		Node root_node(getInventory(), g_spells, search_targets, getDepthLimit(), getPruneDepth());
+	}
+	catch (char const *e)
+	{
+		g_solutions_found += Node::target_hits;
+		g_nodes_searched += Node::nodes_searched;
+	}
+
+	g_steps.processLogs();
+	explorationLogic();
 }
 
 ////////////////////////////////////// TOME MECHANICS ///////////////////////////////////
@@ -1074,7 +1176,7 @@ bool hasSpecial()
 {
 	for (auto tome : g_tomes)
 	{
-		if (tome.second.special)
+		if (tome.second.special && tome.second.tax_cost <= MAX_TAX_COST)
 			return true;
 	}
 	return false;
@@ -1084,323 +1186,104 @@ int getSpecial()
 {
 	for (auto tome : g_tomes)
 	{
-		if (tome.second.special)
+		if (tome.second.special && tome.second.tax_cost <= MAX_TAX_COST)
 			return tome.first;
 	}
 	return -1;
 }
 
-int getOptimalFreeloader()
+int getFreeloader()
 {
-	int max_gain = -999;
-	vector<int> tmp_tomes;
-	int ret = 0;
-
 	for (auto tome : g_tomes)
 	{
 		if (tome.second.freeloader && tome.second.tax_cost <= MAX_TAX_COST)
-			tmp_tomes.push_back(tome.first);
+			return tome.first;
 	}
-	for (auto i : tmp_tomes)
-	{
-		if (g_tomes[i].tier_based_nett >= max_gain)
-		{
-			if (ret != 0 && g_tomes[i].tier_based_nett == max_gain)
-			{
-				if (g_tomes[i].gain_spread > g_tomes[ret].gain_spread)
-					continue;
-			}
-			ret = i;
-			max_gain = g_tomes[i].tier_based_nett;
-		}
-	}
-	return ret;
+	return -1;
 }
 
-////////////////////////////////////// HIGH LEVEL CONTROL FLOW ///////////////////////////////////
+////////////////////////////////////// CONTROL FLOW ///////////////////////////////////
 
-void decideAction()
+void turnAction()
 {
-	if (hasSpecial())
+	launchSearch();
+	if (g_spells.size() < MAX_SPELLS || hasSpecial() && g_potions_brewed < 3)
 	{
-		int tome_id = getSpecial();
-		if (g_tomes[tome_id].haveRequiredStones(g_inv))
+		if (hasSpecial())
 		{
-			g_steps.clearSaved();
-			cout << "LEARN " << tome_id << endl;
-			return;
+			int tome_id = getSpecial();
+			if (g_tomes[tome_id].haveRequiredStones(g_inv))
+			{
+				if (g_spells.size() >= MAX_SPELLS)
+					g_steps.clearSaved();
+				cout << "LEARN " << tome_id << endl;
+				return;
+			}
 		}
-	}
-	if (g_spells.size() < MAX_SPELLS)
-	{
-		searchRecipes();
 		if (hasFreeloader())
 		{
-			int tome_id = getOptimalFreeloader();
+			int tome_id = getFreeloader();
 			if (g_tomes[tome_id].haveRequiredStones(g_inv))
 			{
 				cout << "LEARN " << tome_id << endl;
-				g_steps.clearSaved();
+				return;
 			}
-			else
-				cout << "LEARN " << getFreeTome() << endl;
 		}
-		else
-			cout << "LEARN " << getFreeTome() << endl;
+		cout << "LEARN " << getFreeTome() << endl;
+		return;
 	}
-	else
-	{
-		if (g_pure_survey)
-			g_pure_survey = false;
-		searchRecipes();
-		cout << g_step << endl;
-	}
+	cout << g_step << endl;
 }
 
-void toggleSurvey(int &survey_state)
+////////////////////////////////////// MAIN ///////////////////////////////////
+
+void initializationsOnce()
 {
-	if (g_spells.size() >= MAX_SPELLS && g_survey)
-	{
-		if (survey_state == 1)
-		{
-			g_survey = false;
-			cerr << "Survey mode disabled" << endl;
-			survey_state = 0;
-		}
-		else if (survey_state < 1)
-			survey_state++;
-	}
+	srand(time(0));
+	initializeNodes();
+	initializeLogs();
+
+	g_potions_brewed = 0;
+	g_turn = 1;
+}
+
+void turnResets()
+{
+	g_recipes.clear();
+	g_spells.clear();
+	g_tomes.clear();
+	g_solutions_found = 0;
+	g_nodes_searched = 0;
+	g_steps.clearLogs();
+	clearLogs();
+}
+
+void testStuff()
+{
+	// testInput();
+	// benchmarkCycles(50);
+	// benchmarkAllRecipes();
+	// printData();
+}
+
+void turnSummary()
+{
+	cerr << "Turn " << g_turn << " | " << Timer::getTime() << " ms | " << g_nodes_searched << " nodes | " << g_solutions_found << " solutions " << endl;
+	g_turn++;
 }
 
 int main()
 {
-	initializeNodes();
-	initializeLogs();
-	initializeStrategy();
-
-	g_potions_brewed = 0;
-	g_prune_depth = SURVEY_DEPTH;
-	g_turn = 1;
-
-	srand(time(0));
-
-	int survey_state = 0;
+	initializationsOnce();
 
 	while (true)
 	{
-		// cleaning data
-		g_solutions_found = 0;
-		g_nodes_searched = 0;
-		g_steps.clearLogs();
-
-		// /// benchmarking ///
-		// testInput();
-		// // //benchmarkCycles(50);
-		// benchmarkAllRecipes();
-
-		/// debugging ///
-		//printData();
-
-		/// live input ///
+		turnResets();
 		processInput();
-
-		toggleSurvey(survey_state);
-
 		Timer::setTimer();
-		decideAction();
-
-		cerr << "Turn " << g_turn << " | " << Timer::getTime() << " ms | " << g_nodes_searched << " nodes | " << g_solutions_found << " solutions " << endl;
-
-		g_turn++;
+		turnAction();
+		turnSummary();
 	}
-}
-
-//////////////////////////////////////////////// BENCHMARK /////////////////////////////////////////
-
-// void benchmarkAllRecipes()
-// {
-// 	map<int, vector<int>> search_targets;
-// 	vector<vector<int>> optimal_logs;
-// 	vector<int> recipes_searched;
-// 	vector<int> optimal_log;
-
-// 	Benchmark bm;
-// 	bm.startBenchmark();
-// 	g_timer = Timer();
-
-// 	while (!g_timer.endOfTurn())
-// 	{
-// 		search_targets.clear();
-// 		g_logs.clear();
-
-// 		for (auto recipe : g_recipes)
-// 		{
-// 			bool already_searched = false;
-// 			for (auto searched : recipes_searched)
-// 			{
-// 				if (recipe.first == searched)
-// 				{
-// 					already_searched = true;
-// 					break;
-// 				}
-// 			}
-// 			if (!already_searched)
-// 				search_targets[recipe.first] = recipe.second.getCost();
-// 		}
-// 		if (search_targets.empty())
-// 			break;
-// 		Node root_node(g_inv, g_spells, search_targets);
-// 		// cerr << "exited at " << g_timer.getResult() << " ms." << endl;
-// 		optimal_log = getOptimalLog();
-// 		if (optimal_log.empty())
-// 			break;
-// 		optimal_logs.emplace_back(optimal_log);
-// 		recipes_searched.emplace_back(optimal_log.back());
-// 	}
-// 	// bm.endBenchmark();
-// 	// bm.printResult();
-// 	getStep(optimal_logs);
-// }
-
-// void benchmarkCycles(int cycles)
-// {
-// 	map<int, vector<int>> search_targets;
-// 	for (auto recipe : g_recipes)
-// 		search_targets[recipe.first] = recipe.second.getCost();
-
-// 	Benchmark bm;
-// 	bm.startBenchmark();
-
-// 	for (int i = 0; i < cycles; i++)
-// 	{
-// 		Node root_node(g_inv, g_spells, search_targets);
-// 	}
-// 	bm.endBenchmark();
-// 	cout << "Search time (mean): " << bm.getResult() / cycles << endl;
-// }
-
-//////////////////////////////////////////////// DEBUG /////////////////////////////////////////
-
-void printOptimalLog(vector<int> result)
-{
-	if (result.empty())
-	{
-		cerr << "No results." << endl;
-		return;
-	}
-	if (result.size() == 1)
-	{
-		cerr << "All ingredients for action " << result.back() << " are available." << endl;
-		return;
-	}
-	cerr << "Action " << result.back() << " in " << result.size() - 1 << " step(s): ";
-	for (auto step : result)
-	{
-		if (step == result.back())
-			continue;
-		if (step != NODE_REST)
-			cerr << step;
-		else
-			cerr << "REST";
-		cerr << ", ";
-	}
-	cerr << endl;
-}
-
-void printLogs(vector<vector<int>> results)
-{
-	for (auto log : results)
-	{
-		cerr << "Action " << log.back() << " in " << log.size() - 1 << " step(s): ";
-		for (auto step : log)
-		{
-			if (step == log.back())
-				continue;
-			if (step != NODE_REST)
-				cerr << step;
-			else
-				cerr << "REST";
-			cerr << ", ";
-		}
-		cerr << endl;
-	}
-}
-
-void printSpells()
-{
-	cerr << "-------------SPELLS-------------" << endl;
-	for (auto spell : g_spells)
-	{
-		cerr << "spell " << spell.first << " [";
-		for (int i = 0; i < 4; i++)
-		{
-			cerr << spell.second.stones[i];
-			(i == 3) ? cerr << "]" << endl : cerr << ", ";
-		}
-	}
-}
-
-void printTomes()
-{
-	cerr << "-------------TOMES-------------" << endl;
-	for (auto tome : g_tomes)
-	{
-		cerr << "tome " << tome.first << " [";
-		for (int i = 0; i < 4; i++)
-		{
-			cerr << tome.second.stones[i];
-			(i == 3) ? cerr << "]" : cerr << ", ";
-		}
-		if (tome.second.freeloader)
-			cerr << " - freeloader";
-		cerr << endl;
-	}
-}
-
-void printRecipes()
-{
-	cerr << "-------------RECIPES-------------" << endl;
-	for (auto recipe : g_recipes)
-	{
-		cerr << "recipe " << recipe.first << " [";
-		for (int i = 0; i < 4; i++)
-		{
-			cerr << recipe.second.stones[i];
-			(i == 3) ? cerr << "]" : cerr << ", ";
-		}
-		cerr << " - rating " << recipe.second.rating << " - steps " << recipe.second.steps << " - " << recipe.second.price << " rupees" << endl;
-	}
-}
-
-void printData()
-{
-	printRecipes();
-	//printTomes();
-	printSpells();
-}
-
-/////////////////////////////////// TEST INPUT ///////////////////////////////////
-
-void testInput()
-{
-	g_recipes.insert({60, Recipe(0, 0, -5, 0, 60, 16)});
-	g_recipes.insert({62, Recipe(0, -2, 0, -3, 62, 19)});
-	g_recipes.insert({72, Recipe(0, -2, -2, -2, 72, 19)});
-	g_recipes.insert({74, Recipe(-3, -1, -1, -1, 74, 14)});
-	g_recipes.insert({75, Recipe(-1, -3, -1, -1, 75, 16)});
-
-	g_spells.insert({78, Spell(2, 0, 0, 0, 78, true, false)});
-	g_spells.insert({79, Spell(-1, 1, 0, 0, 79, true, false)});
-	g_spells.insert({80, Spell(0, -1, 1, 0, 80, true, false)});
-	g_spells.insert({81, Spell(0, 0, -1, 1, 81, true, false)});
-	g_spells.insert({86, Spell(1, 1, 0, 0, 86, true, false)});
-	g_spells.insert({88, Spell(3, -2, 1, 0, 88, true, true)});
-	g_spells.insert({90, Spell(4, 0, 0, 0, 90, true, false)});
-	g_spells.insert({92, Spell(2, 3, -2, 0, 92, true, true)});
-	g_spells.insert({94, Spell(0, 2, -1, 0, 94, true, true)});
-	g_spells.insert({96, Spell(-4, 0, 2, 0, 96, true, true)});
-	g_spells.insert({98, Spell(0, -3, 0, 2, 98, true, true)});
-	g_spells.insert({100, Spell(2, 1, -2, 1, 100, true, true)});
 }
 
 /////////////////////////////////// INPUT & INITIALIZATIONS ///////////////////////////////////
@@ -1459,10 +1342,6 @@ void processInventory()
 
 void processInput()
 {
-	g_recipes.clear();
-	g_spells.clear();
-	g_tomes.clear();
-
 	processActions();
 	processInventory();
 }

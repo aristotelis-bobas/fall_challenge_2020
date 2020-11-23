@@ -77,7 +77,7 @@ class Timer
 public:
 	bool time_to_go = false;
 	Timer() { start = high_resolution_clock::now(); }
-	bool isItTimeToGo()
+	bool endOfTurn()
 	{
 		duration<double, milli> time_span = duration<double, std::milli>(high_resolution_clock::now() - start);
 		if (time_span.count() > TIMER_CUTOFF)
@@ -341,7 +341,7 @@ pair<int, int> getRepeatingSpell(int log_id)
 {
 	for (auto spell : g_spells)
 	{
-		for (int i = 2; i < 10; i++)
+		for (int i = 2; i < 5; i++)
 		{
 			if (log_id / i == spell.second.id)
 				return {spell.second.id, i};
@@ -376,7 +376,6 @@ public:
 	bool rest_option = false;
 
 	/// class state
-	static Timer timer;
 	static map<int, vector<int>> targets;
 	static int limit;
 	static int nodes_searched;
@@ -394,7 +393,6 @@ public:
 		Node::target_hits = 0;
 		Node::limit_hits = 0;
 		Node::error_hits = 0;
-		Node::timer = Timer();
 
 		// initialize object state
 		inv = {start_inv.stones[0], start_inv.stones[1], start_inv.stones[2], start_inv.stones[3], start_inv.slots_filled};
@@ -450,7 +448,7 @@ public:
 		if (targetHit())
 			return;
 		getOptions();
-		if (!errorHit() && !timer.isItTimeToGo())
+		if (!errorHit() && !g_timer.endOfTurn())
 			increaseDepth();
 	}
 
@@ -586,7 +584,6 @@ public:
 
 // static initializations
 map<int, vector<int>> Node::targets;
-Timer Node::timer;
 int Node::limit;
 int Node::nodes_searched;
 int Node::target_hits;
@@ -735,6 +732,19 @@ void cleanLogs()
 void printOptimalLog(vector<int> result);
 void printLogs(vector<vector<int>> results);
 
+/* 
+
+	while (!endOfTurn())
+	{
+		search (search_targets)
+		---> save logs for recipe X
+		---> remove recipe X from search_targets
+	}
+	if (endOfTurn())
+	--> calculate best option price^2 / ((max_steps - steps +1)/max_steps)
+
+*/
+
 void searchRecipes()
 {
 	map<int, vector<int>> search_targets;
@@ -800,84 +810,56 @@ int getOptimalFreeloader()
 	return ret;
 }
 
-/////////////////////////////////// TEST INPUT ///////////////////////////////////
+////////////////////////////////////// HIGH LEVEL CONTROL FLOW ///////////////////////////////////
 
-void testInput()
+void decideAction()
 {
-	g_recipes.insert({60, Recipe(0, 0, -5, 0, 60, 16)});
-	g_recipes.insert({62, Recipe(0, -2, 0, -3, 62, 19)});
-	g_recipes.insert({72, Recipe(0, -2, -2, -2, 72, 19)});
-	g_recipes.insert({74, Recipe(-3, -1, -1, -1, 74, 14)});
-	g_recipes.insert({75, Recipe(-1, -3, -1, -1, 75, 16)});
+	cleanLogs();
+	g_timer = Timer();
 
-	g_spells.insert({78, Spell(2, 0, 0, 0, 78, true, false)});
-	g_spells.insert({79, Spell(-1, 1, 0, 0, 79, true, false)});
-	g_spells.insert({80, Spell(0, -1, 1, 0, 80, true, false)});
-	g_spells.insert({81, Spell(0, 0, -1, 1, 81, true, false)});
-}
-
-/////////////////////////////////// INPUT & INITIALIZATIONS ///////////////////////////////////
-
-void processActions()
-{
-	int action_count;
-	cin >> action_count;
-	cin.ignore();
-
-	for (int i = 0; i < action_count; i++)
+	if (g_spells.size() < MIN_SPELLS)
 	{
-		int id;			 // the unique ID of this spell or recipe
-		string type;	 // CAST, OPPONENT_CAST, LEARN, BREW
-		int blue;		 // tier-0 ingredient change
-		int green;		 // tier-1 ingredient change
-		int orange;		 // tier-2 ingredient change
-		int yellow;		 // tier-3 ingredient change
-		int price;		 // the price in rupees if this is a potion
-		bool castable;	 // 1 if this is a castable player spell
-		int tome_index;	 // the index in the tome if this is a tome spell, equal to the read-ahead tax
-		int tax_count;	 // the amount of taxed tier-0 ingredients you gain from learning this spell
-		bool repeatable; // 1 if this is a repeatable player spell
-
-		cin >> id >> type >> blue >> green >> orange >> yellow >> price >> tome_index >> tax_count >> castable >> repeatable;
-		cin.ignore();
-
-		if (type == "BREW")
-			g_recipes.insert({id, Recipe(blue, green, orange, yellow, id, price)});
-		else if (type == "CAST")
-			g_spells.insert({id, Spell(blue, green, orange, yellow, id, castable, repeatable)});
-		else if (type == "LEARN")
-			g_tomes.insert({id, Tome(blue, green, orange, yellow, id, tome_index, tax_count, repeatable)});
+		if (hasFreeloader())
+		{
+			int tome_id = getOptimalFreeloader();
+			if (g_tomes[tome_id].haveRequiredStones(g_inv))
+				cout << "LEARN " << tome_id << endl;
+			else
+				cout << "LEARN " << getFreeTome() << endl;
+		}
+		else
+			cout << "LEARN " << getFreeTome() << endl;
+	}
+	else
+	{
+		searchRecipes();
+		cout << g_step << endl;
 	}
 }
 
-void processInventory()
+int main()
 {
-	for (int i = 0; i < 2; i++)
+	initializeNodes();
+	initializeLogs();
+
+	Benchmark turn;
+	int turns = 1;
+
+	while (true)
 	{
-		int blue;
-		int green;
-		int orange;
-		int yellow;
-		int score;
+		/// debug ///
+		//testInput();
+		//benchmarkSearcher();
+		//printData();
 
-		cin >> blue >> green >> orange >> yellow >> score;
-		cin.ignore();
+		processInput();
+		turn.startBenchmark();
 
-		if (i == 0)
-			g_inv = Inventory(blue, green, orange, yellow, score);
-		if (i == 1)
-			enemy_score = score;
+		decideAction();
+		turn.endBenchmark();
+
+		cerr << "Turn took " << turn.getResult() << " ms." << endl;
 	}
-}
-
-void processInput()
-{
-	g_recipes.clear();
-	g_spells.clear();
-	g_tomes.clear();
-
-	processActions();
-	processInventory();
 }
 
 //////////////////////////////////////////////// BENCHMARK /////////////////////////////////////////
@@ -1004,53 +986,82 @@ void printData()
 	printSpells();
 }
 
-////////////////////////////////////// HIGH LEVEL CONTROL FLOW ///////////////////////////////////
+/////////////////////////////////// TEST INPUT ///////////////////////////////////
 
-void decideAction()
+void testInput()
 {
-	cleanLogs();
+	g_recipes.insert({60, Recipe(0, 0, -5, 0, 60, 16)});
+	g_recipes.insert({62, Recipe(0, -2, 0, -3, 62, 19)});
+	g_recipes.insert({72, Recipe(0, -2, -2, -2, 72, 19)});
+	g_recipes.insert({74, Recipe(-3, -1, -1, -1, 74, 14)});
+	g_recipes.insert({75, Recipe(-1, -3, -1, -1, 75, 16)});
 
-	if (g_spells.size() < MIN_SPELLS)
+	g_spells.insert({78, Spell(2, 0, 0, 0, 78, true, false)});
+	g_spells.insert({79, Spell(-1, 1, 0, 0, 79, true, false)});
+	g_spells.insert({80, Spell(0, -1, 1, 0, 80, true, false)});
+	g_spells.insert({81, Spell(0, 0, -1, 1, 81, true, false)});
+}
+
+/////////////////////////////////// INPUT & INITIALIZATIONS ///////////////////////////////////
+
+void processActions()
+{
+	int action_count;
+	cin >> action_count;
+	cin.ignore();
+
+	for (int i = 0; i < action_count; i++)
 	{
-		if (hasFreeloader())
-		{
-			int tome_id = getOptimalFreeloader();
-			if (g_tomes[tome_id].haveRequiredStones(g_inv))
-				cout << "LEARN " << tome_id << endl;
-			else
-				cout << "LEARN " << getFreeTome() << endl;
-		}
-		else
-			cout << "LEARN " << getFreeTome() << endl;
-	}
-	else
-	{
-		searchRecipes();
-		cout << g_step << endl;
+		int id;			 // the unique ID of this spell or recipe
+		string type;	 // CAST, OPPONENT_CAST, LEARN, BREW
+		int blue;		 // tier-0 ingredient change
+		int green;		 // tier-1 ingredient change
+		int orange;		 // tier-2 ingredient change
+		int yellow;		 // tier-3 ingredient change
+		int price;		 // the price in rupees if this is a potion
+		bool castable;	 // 1 if this is a castable player spell
+		int tome_index;	 // the index in the tome if this is a tome spell, equal to the read-ahead tax
+		int tax_count;	 // the amount of taxed tier-0 ingredients you gain from learning this spell
+		bool repeatable; // 1 if this is a repeatable player spell
+
+		cin >> id >> type >> blue >> green >> orange >> yellow >> price >> tome_index >> tax_count >> castable >> repeatable;
+		cin.ignore();
+
+		if (type == "BREW")
+			g_recipes.insert({id, Recipe(blue, green, orange, yellow, id, price)});
+		else if (type == "CAST")
+			g_spells.insert({id, Spell(blue, green, orange, yellow, id, castable, repeatable)});
+		else if (type == "LEARN")
+			g_tomes.insert({id, Tome(blue, green, orange, yellow, id, tome_index, tax_count, repeatable)});
 	}
 }
 
-int main()
+void processInventory()
 {
-	initializeNodes();
-	initializeLogs();
-
-	Benchmark turn;
-	int turns = 1;
-
-	while (true)
+	for (int i = 0; i < 2; i++)
 	{
-		/// debug ///
-		//testInput();
-		//benchmarkSearcher();
-		//printData();
+		int blue;
+		int green;
+		int orange;
+		int yellow;
+		int score;
 
-		processInput();
-		turn.startBenchmark();
+		cin >> blue >> green >> orange >> yellow >> score;
+		cin.ignore();
 
-		decideAction();
-		turn.endBenchmark();
-
-		cerr << "Turn took " << turn.getResult() << " ms." << endl;
+		if (i == 0)
+			g_inv = Inventory(blue, green, orange, yellow, score);
+		if (i == 1)
+			enemy_score = score;
 	}
+}
+
+void processInput()
+{
+	g_recipes.clear();
+	g_spells.clear();
+	g_tomes.clear();
+
+	processActions();
+	processInventory();
 }

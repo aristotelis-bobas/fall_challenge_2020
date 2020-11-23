@@ -10,8 +10,8 @@
 
 /// CODINGAME SERVER OPTIMIZATIONS ///
 
-#pragma GCC target("avx")
-#include <x86intrin.h>
+// #pragma GCC target("avx")
+// #include <x86intrin.h>
 
 /////////////////////////////////////
 
@@ -24,13 +24,15 @@
 #include <cmath>
 #include <cstdlib>
 
-#define NODE_COUNT 1000000
-#define LOG_COUNT 10000
-#define INITIAL_DEPTH_LIMIT 10
-#define NODE_REST 777
+#define DEPTH_CUTOFF 1
+#define DEPTH_LIMIT 12
 
 #define MAX_SPELLS 12
-#define TIMER_CUTOFF 40
+#define TIMER_CUTOFF 48
+
+#define NODE_REST 777
+#define NODE_COUNT 1000000
+#define LOG_COUNT 10000
 
 #define TIER_1_VALUE 1
 #define TIER_2_VALUE 2
@@ -61,7 +63,7 @@ public:
 		end = high_resolution_clock::now();
 		time_span = duration<double, std::milli>(end - start);
 	}
-	auto getResult() { return time_span.count(); }
+	double getResult() { return time_span.count(); }
 	void printResult() { cerr << "benchmark took " << time_span.count() << " ms" << endl; }
 
 private:
@@ -76,14 +78,29 @@ public:
 	Timer() { start = high_resolution_clock::now(); }
 	bool endOfTurn()
 	{
-		duration<double, milli> time_span = duration<double, std::milli>(high_resolution_clock::now() - start);
-		if (time_span.count() > TIMER_CUTOFF)
+		time_span = duration<double, std::milli>(high_resolution_clock::now() - start);
+		if (time_span.count() >= TIMER_CUTOFF)
+		{
+			// debugging
+			// if (!message)
+			// {
+			// 	cerr << "Time elapsed when exiting: " << time_span.count() << " ms." << endl;
+			// 	message = true;
+			// }
 			return true;
+		}
 		return false;
+	}
+	double getResult()
+	{
+		time_span = duration<double, std::milli>(high_resolution_clock::now() - start);
+		return time_span.count();
 	}
 
 private:
 	high_resolution_clock::time_point start;
+	duration<double, milli> time_span;
+	bool message = false;
 };
 
 struct Stones
@@ -373,7 +390,7 @@ public:
 	{
 		// initialize class state
 		Node::targets = search_targets;
-		Node::limit = INITIAL_DEPTH_LIMIT;
+		Node::limit = DEPTH_LIMIT;
 		Node::nodes_searched = 0;
 		Node::target_hits = 0;
 		Node::limit_hits = 0;
@@ -398,12 +415,15 @@ public:
 
 		// expansion mechanics
 		getOptions();
+		if (g_timer.endOfTurn())
+			return;
 		increaseDepth();
 
 		// benchmark results
 		// bm.endBenchmark();
 		// cerr << "Searched " << nodes_searched << " nodes in " << bm.getResult() << " ms and found ";
 		// cerr << target_hits << " target hits, " << limit_hits << " limit hits." << endl;
+
 		g_solutions_found += Node::target_hits;
 		g_nodes_searched += Node::nodes_searched;
 	}
@@ -422,7 +442,7 @@ public:
 
 	// fill recycled Node with appropiate info
 	void createChildNode(array<int, 5> mutated_inv, map<int, bool> mutated_spells, vector<int> mutated_log, int mutated_depth)
-	{
+	{		
 		cleanNode();
 
 		Node::nodes_searched++;
@@ -441,6 +461,8 @@ public:
 
 		// expansion mechanics
 		getOptions();
+		if (g_timer.endOfTurn())
+			return;
 		increaseDepth();
 	}
 
@@ -450,12 +472,22 @@ public:
 		{
 			if (capacityHit())
 				return;
+			if (depth > DEPTH_CUTOFF)
+			{
+			 	if (!randomHit())
+					continue;
+			}
 			g_nodes[Node::nodes_searched].createChildNode(mutatedInventory(spell_id), mutatedSpells(spell_id), mutatedLog(spell_id), depth + 1);
 		}
 		for (auto spell : repeats)
 		{
 			if (capacityHit())
 				return;
+			// if (depth > DEPTH_CUTOFF + 1)
+			// {
+			//  	if (!randomHit())
+			// 		continue;
+			// }
 			g_nodes[Node::nodes_searched].createChildNode(mutatedInventory(spell.first, spell.second), mutatedSpells(spell.first), mutatedLog(spell.first * spell.second), depth + 1);
 		}
 		if (capacityHit())
@@ -495,14 +527,22 @@ public:
 			option_count++;
 	}
 
+	// eliminating options to search deeper in shorter time
+	bool randomHit()
+	{
+		if (rand() % 3 == 0)
+			return true;
+		return false;
+	}
+
 	// turn based or game limits //
 	bool capacityHit()
 	{
+		if (g_timer.endOfTurn())
+			return true;
 		if (Node::nodes_searched + 1 > NODE_COUNT)
 			return true;
 		if (Node::target_hits + 1 > LOG_COUNT)
-			return true;
-		if (g_timer.endOfTurn())
 			return true;
 		return false;
 	}
@@ -593,16 +633,16 @@ int Node::limit_hits;
 
 void initializeNodes()
 {
-	Benchmark bm;
-	bm.startBenchmark();
+	//Benchmark bm;
+	//bm.startBenchmark();
 
 	g_nodes.reserve(NODE_COUNT);
 
 	for (int i = 0; i < NODE_COUNT; i++)
 		g_nodes.emplace_back();
 
-	bm.endBenchmark();
-	cerr << "Created global node tree of size " << NODE_COUNT << " in " << bm.getResult() << " ms." << endl;
+	//bm.endBenchmark();
+	//cerr << "Created global node tree of size " << NODE_COUNT << " in " << bm.getResult() << " ms." << endl;
 }
 
 ////////////////////////////////////// SEARCH LOGS  //////////////////////////////////////
@@ -684,7 +724,7 @@ vector<int> getOptimalLog()
 	return logs.front();
 }
 
-string getRecipeStep(vector<int> optimal_log)
+void getRecipeStep(vector<int> optimal_log)
 {
 	if (optimal_log.size() == 1)
 	{
@@ -693,32 +733,34 @@ string getRecipeStep(vector<int> optimal_log)
 			if (recipe.second.id == optimal_log.front())
 			{
 				g_potions_brewed++;
-				return "BREW " + to_string(optimal_log.front()) + " HERE'S YOUR SHIT, SIR";
+				g_step = "BREW " + to_string(optimal_log.front()) + " HERE'S YOUR SHIT, SIR";
+				return;
 			}
 		}
 		for (auto &tome : g_tomes)
 		{
 			if (tome.second.id == optimal_log.front())
-				return "LEARN " + to_string(optimal_log.front());
-		}
-		///// NO SUPPORT FOR REPEATING SPELLS (!)
-		for (auto &spell : g_spells)
-		{
-			if (spell.second.id == optimal_log.front())
-				return "CAST " + to_string(optimal_log.front());
+			{
+				g_step = "LEARN " + to_string(optimal_log.front());
+				return;
+			}
 		}
 	}
 	else if (optimal_log.front() == NODE_REST)
-		return "REST";
+	{
+		g_step = "REST";
+		return;
+	}
 	else if (isRepeatingSpell(optimal_log.front()))
 	{
 		pair<int, int> repeat = getRepeatingSpell(optimal_log.front());
-		return "CAST " + to_string(repeat.first) + " " + to_string(repeat.second);
+		g_step = "CAST " + to_string(repeat.first) + " " + to_string(repeat.second);
+		return;
 	}
-	return "CAST " + to_string(optimal_log.front());
+	g_step = "CAST " + to_string(optimal_log.front());
 }
 
-string getStepHighestRate(vector<vector<int>> optimal_logs)
+void getStepPower(vector<vector<int>> optimal_logs)
 {
 	vector<int> optimal_log;
 	map<int, float> ratings;
@@ -733,7 +775,7 @@ string getStepHighestRate(vector<vector<int>> optimal_logs)
 	for (auto recipe : optimal_logs)
 	{
 		int recipe_id = recipe.back();
-		ratings[recipe_id] = (float)g_recipes[recipe_id].price / recipe.size();
+		ratings[recipe_id] = pow(g_recipes[recipe_id].price, 2) / (recipe.size() + 2);
 		cerr << "Recipe " << recipe_id << " | " << g_recipes[recipe_id].price << " / " << recipe.size() << " = " << ratings[recipe_id] << "." << endl;
 	}
 
@@ -749,10 +791,50 @@ string getStepHighestRate(vector<vector<int>> optimal_logs)
 	}
 	cerr << "__________________________________" << endl;
 	cerr << "Target " << best_recipe << " | " << g_recipes[best_recipe].price << " / " << recipes[best_recipe].size() << " = " << best_rating << "." << endl;
-	return getRecipeStep(recipes[best_recipe]);
+	printOptimalLog(recipes[best_recipe]);
+	getRecipeStep(recipes[best_recipe]);
 }
 
-string getStepQuickest(vector<vector<int>> &optimal_logs)
+void getStepOpportunistic(vector<vector<int>> optimal_logs)
+{
+	vector<int> optimal_log;
+	map<int, float> ratings;
+	map<int, vector<int>> recipes;
+	
+	for (auto recipe : optimal_logs)
+	{
+		int recipe_id = recipe.back();
+		recipes[recipe_id] = recipe;
+	}
+
+	for (auto recipe : optimal_logs)
+	{
+		int recipe_id = recipe.back();
+		ratings[recipe_id] = g_recipes[recipe_id].price / (recipe.size() + 1);
+		cerr << "Recipe " << recipe_id << " | " << g_recipes[recipe_id].price << " / " << recipe.size() << " = " << ratings[recipe_id] << "." << endl;
+	}
+
+	float best_rating = -999;
+	int best_recipe = 0;
+	for (auto rating : ratings)
+	{
+		if (rating.second >= best_rating)
+		{
+			if (rating.second == best_rating)
+			{
+				if (recipes[rating.first].size() > recipes[best_recipe].size())
+					continue;
+			}
+			best_rating = rating.second;
+			best_recipe = rating.first;
+		}
+	}
+	cerr << "__________________________________" << endl;
+	cerr << "Target " << best_recipe << " | " << g_recipes[best_recipe].price << " / " << recipes[best_recipe].size() << " = " << best_rating << "." << endl;
+	getRecipeStep(recipes[best_recipe]);
+}
+
+void getStepQuickest(vector<vector<int>> &optimal_logs)
 {
 	vector<vector<int>> quickest_logs;
 	int smallest = 2000;
@@ -762,28 +844,67 @@ string getStepQuickest(vector<vector<int>> &optimal_logs)
 		if (log.size() < smallest)
 			smallest = log.size();
 	}
-
 	for (auto log : optimal_logs)
 	{
 		if (log.size() == smallest)
 			quickest_logs.emplace_back(log);
 	}
-
-	return getStepHighestRate(quickest_logs);
+	getStepOpportunistic(quickest_logs);
 }
 
-string getStep(vector<vector<int>> optimal_logs)
+void getFreeStep()
 {
-	if (optimal_logs.empty())
+	for (auto &spell : g_spells)
 	{
-		cerr << "Empty step. Learning free tome instead." << endl;
-		return "LEARN " + to_string(getFreeTome()) + " DEEZ NUTS";
+		if (spell.second.haveRequiredStones(g_inv))
+		{
+			g_step = "CAST " + to_string(spell.first);
+			return;
+		}
 	}
-	if (g_potions_brewed >= 4)
+	g_step = "LEARN " + to_string(getFreeTome());
+}
+
+void getStep(vector<vector<int>> optimal_logs)
+{
+	bool found_solution = false;
+
+	for (auto log : optimal_logs)
 	{
-		return getStepQuickest(optimal_logs);
+		if (!log.empty())
+		{
+			found_solution = true;
+			break;
+		}
 	}
-	return getStepHighestRate(optimal_logs);
+
+	if (!found_solution)
+	{
+		getFreeStep();
+		return;
+	}
+
+	// 4x power - 2x quick strategy
+	// if (g_potions_brewed >= 4)
+	// {
+	// 	getStepQuickest(optimal_logs);
+	// 	return;
+	// }
+	// getStepPower(optimal_logs);
+
+    // 3x power - 3x quick strategy
+	// if (g_potions_brewed >= 3)
+	// {
+	// 	getStepOpportunistic(optimal_logs);
+	// 	return;
+	// }
+	// getStepPower(optimal_logs);
+
+	// 6x power strategy
+	getStepPower(optimal_logs);
+
+	// 6x opportunistic strategy
+	// getStepOpportunistic(optimal_logs);
 }
 
 void addLog(vector<int> log)
@@ -833,7 +954,7 @@ void searchRecipes()
 		optimal_logs.emplace_back(optimal_log);
 		recipes_searched.emplace_back(optimal_logs.back().back());
 	}
-	g_step = getStep(optimal_logs);
+	getStep(optimal_logs);
 }
 
 ////////////////////////////////////// TOME MECHANICS ///////////////////////////////////
@@ -891,7 +1012,7 @@ void decideAction()
 {
 	g_timer = Timer();
 
-	if (g_spells.size() <= MAX_SPELLS && hasFreeloader())
+	if (g_spells.size() < MAX_SPELLS && hasFreeloader())
 	{
 		int tome_id = getOptimalFreeloader();
 		if (g_tomes[tome_id].haveRequiredStones(g_inv))
@@ -929,22 +1050,26 @@ int main()
 		
 
 		// /// benchmarking ///
-		// testInput();
+		testInput();
 		// //benchmarkCycles(50);
-		// benchmarkAllRecipes();
+		//turn.startBenchmark();
+		turn.startBenchmark();
+		benchmarkAllRecipes();
+		turn.endBenchmark();
 
 		/// debugging ///
 		//printData();
 
 		/// live input ///
-		processInput();
+		//processInput();
 		
-		turn.startBenchmark();
-		decideAction();
-		turn.endBenchmark();
+		//turn.startBenchmark();
+
+		//turn.endBenchmark();
 
 		cerr << turn.getResult() << " ms | " << g_nodes_searched << " nodes | " << g_solutions_found << " solutions " << endl;
-		//return 0; /// debugging / benchmarking
+		
+		return 0; /// debugging / benchmarking
 	}
 }
 
@@ -959,6 +1084,7 @@ void benchmarkAllRecipes()
 
 	Benchmark bm;
 	bm.startBenchmark();
+	g_timer = Timer();
 
 	while (!g_timer.endOfTurn())
 	{
@@ -982,14 +1108,15 @@ void benchmarkAllRecipes()
 		if (search_targets.empty())
 			break;
 		Node root_node(g_inv, g_spells, search_targets);
+		// cerr << "exited at " << g_timer.getResult() << " ms." << endl;
 		optimal_log = getOptimalLog();
 		if (optimal_log.empty())
 			break;
 		optimal_logs.emplace_back(optimal_log);
 		recipes_searched.emplace_back(optimal_log.back());
 	}
-	bm.endBenchmark();
-	cout << "Search time: " << bm.getResult() << endl;
+	// bm.endBenchmark();
+	// bm.printResult();
 	getStep(optimal_logs);
 }
 
@@ -1124,6 +1251,14 @@ void testInput()
 	g_spells.insert({79, Spell(-1, 1, 0, 0, 79, true, false)});
 	g_spells.insert({80, Spell(0, -1, 1, 0, 80, true, false)});
 	g_spells.insert({81, Spell(0, 0, -1, 1, 81, true, false)});
+	g_spells.insert({86, Spell(1, 1, 0, 0, 86, true, false)});
+	g_spells.insert({88, Spell(3, -2, 1, 0, 88, true, true)});
+	g_spells.insert({90, Spell(4, 0, 0, 0, 90, true, false)});
+	g_spells.insert({92, Spell(2, 3, -2, 0, 92, true, true)});
+	g_spells.insert({94, Spell(0, 2, -1, 0, 94, true, true)});
+	g_spells.insert({96, Spell(-4, 0, 2, 0, 96, true, true)});
+	g_spells.insert({98, Spell(0, -3, 0, 2, 98, true, true)});
+	g_spells.insert({100, Spell(2, 1, -2, 1, 100, true, true)});
 }
 
 /////////////////////////////////// INPUT & INITIALIZATIONS ///////////////////////////////////

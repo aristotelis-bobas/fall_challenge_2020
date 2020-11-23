@@ -145,10 +145,12 @@ struct Tome : public Action
 	{
 		weighted_cost = 0;
 		weighted_gain = 0;
+
 		(blue <= 0) ? weighted_cost += blue_weight * abs(blue) : weighted_gain += blue_weight * blue;
 		(green <= 0) ? weighted_cost += green_weight * abs(green) : weighted_gain += green_weight * green;
 		(orange <= 0) ? weighted_cost += orange_weight * abs(orange) : weighted_gain += orange_weight * orange;
 		(yellow <= 0) ? weighted_cost += yellow_weight * abs(yellow) : weighted_gain += yellow_weight * yellow;
+		
 		weighted = weighted_gain - weighted_cost;
 
 		{

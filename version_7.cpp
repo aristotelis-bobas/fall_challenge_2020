@@ -720,7 +720,7 @@ void getRecipeStep(vector<int> optimal_log)
 	g_step = "CAST " + to_string(optimal_log.front());
 }
 
-void getStepHighestRate(vector<vector<int>> optimal_logs)
+void getStepPower(vector<vector<int>> optimal_logs)
 {
 	vector<int> optimal_log;
 	map<int, float> ratings;
@@ -754,6 +754,45 @@ void getStepHighestRate(vector<vector<int>> optimal_logs)
 	getRecipeStep(recipes[best_recipe]);
 }
 
+void getStepOpportunistic(vector<vector<int>> optimal_logs)
+{
+	vector<int> optimal_log;
+	map<int, float> ratings;
+	map<int, vector<int>> recipes;
+	
+	for (auto recipe : optimal_logs)
+	{
+		int recipe_id = recipe.back();
+		recipes[recipe_id] = recipe;
+	}
+
+	for (auto recipe : optimal_logs)
+	{
+		int recipe_id = recipe.back();
+		ratings[recipe_id] = g_recipes[recipe_id].price / recipe.size();
+		cerr << "Recipe " << recipe_id << " | " << g_recipes[recipe_id].price << " / " << recipe.size() << " = " << ratings[recipe_id] << "." << endl;
+	}
+
+	float best_rating = -999;
+	int best_recipe = 0;
+	for (auto rating : ratings)
+	{
+		if (rating.second >= best_rating)
+		{
+			if (rating.second == best_rating)
+			{
+				if (recipes[rating.first].size() > recipes[best_recipe].size())
+					continue;
+			}
+			best_rating = rating.second;
+			best_recipe = rating.first;
+		}
+	}
+	cerr << "__________________________________" << endl;
+	cerr << "Target " << best_recipe << " | " << g_recipes[best_recipe].price << " / " << recipes[best_recipe].size() << " = " << best_rating << "." << endl;
+	getRecipeStep(recipes[best_recipe]);
+}
+
 void getStepQuickest(vector<vector<int>> &optimal_logs)
 {
 	vector<vector<int>> quickest_logs;
@@ -769,7 +808,7 @@ void getStepQuickest(vector<vector<int>> &optimal_logs)
 		if (log.size() == smallest)
 			quickest_logs.emplace_back(log);
 	}
-	getStepHighestRate(quickest_logs);
+	getStepOpportunistic(quickest_logs);
 }
 
 void getFreeStep()
@@ -804,12 +843,12 @@ void getStep(vector<vector<int>> optimal_logs)
 		return;
 	}
 
-	if (g_potions_brewed >= 4)
-	{
-		getStepQuickest(optimal_logs);
-		return;
-	}
-	getStepHighestRate(optimal_logs);
+	// if (g_potions_brewed >= 3)
+	// {
+	// 	getStepOpportunistic(optimal_logs);
+	// 	return;
+	// }
+	getStepPower(optimal_logs);
 }
 
 void addLog(vector<int> log)

@@ -22,15 +22,15 @@
 #include <vector>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
 
 #define NODE_COUNT 1000000
 #define LOG_COUNT 10000
 #define INITIAL_DEPTH_LIMIT 15
-#define NODE_REST 777
+#define REST 777
 
-#define MAX_SPELLS 12
-#define TIMER_CUTOFF 49
+#define MIN_SPELLS 10
+#define MAX_SPELLS 14
+#define TIMER 47
 
 #define TIER_1_VALUE 1
 #define TIER_2_VALUE 2
@@ -42,11 +42,6 @@ using namespace std::chrono;
 
 void processInput();
 int getFreeTome();
-void printOptimalLog(vector<int> result);
-void printLogs(vector<vector<int>> results);
-void testInput();
-void benchmarkCycles(int cycles);
-void benchmarkAllRecipes();
 
 ////////////////////////////////////// CLASSES ///////////////////////////////////
 
@@ -73,18 +68,27 @@ private:
 class Timer
 {
 public:
-	Timer() { start = high_resolution_clock::now(); }
-	bool endOfTurn()
+	Timer(){};
+	static void setTimer() { Timer::start = high_resolution_clock::now(); }
+	static void checkEndOfTurn()
 	{
-		duration<double, milli> time_span = duration<double, std::milli>(high_resolution_clock::now() - start);
-		if (time_span.count() > TIMER_CUTOFF)
-			return true;
-		return false;
+		Timer::time_span = duration<double, std::milli>(high_resolution_clock::now() - Timer::start);
+		if (Timer::time_span.count() >= TIMER)
+			throw "Timer went off.";
+	}
+	static double getTime()
+	{
+		time_span = duration<double, std::milli>(high_resolution_clock::now() - start);
+		return time_span.count();
 	}
 
 private:
-	high_resolution_clock::time_point start;
+	static high_resolution_clock::time_point start;
+	static duration<double, milli> time_span;
 };
+
+high_resolution_clock::time_point Timer::start;
+duration<double, milli> Timer::time_span;
 
 struct Stones
 {
@@ -211,6 +215,7 @@ public:
 
 		if (cost_spread == 0)
 			freeloader = true;
+
 	}
 
 	vector<int> getCost()
@@ -302,23 +307,33 @@ public:
 
 class Node;
 
-Timer g_timer;
 vector<Node> g_nodes;
 vector<vector<int>> g_logs;
 map<int, Recipe> g_recipes;
 map<int, Tome> g_tomes;
 map<int, Spell> g_spells;
+map<int, Spell> g_tomespells;
 Inventory g_inv;
-string g_step;
-int enemy_score;
+
 int g_nodes_searched;
 int g_solutions_found;
+string g_step;
 
-////////////////////////////////////// SPELL UTILITIES  //////////////////////////////////////
+
+////////////////////////////////////// TOME // SPELL UTILITIES  //////////////////////////////////////
+
+
+
+void setTomeSpells()
+{
+	g_tomespells = g_spells;
+	for (auto &tome : g_tomes)
+		g_tomespells.insert({tome.first, Spell(tome.second.stones[0], tome.second.stones[1], tome.second.stones[2], tome.second.stones[3], tome.first, true, tome.second.repeat)});
+}
 
 bool isRepeatingSpell(int log_id)
 {
-	for (auto spell : g_spells)
+	for (auto spell : g_tomespells)
 	{
 		if (log_id == spell.second.id)
 			return false;
@@ -328,15 +343,38 @@ bool isRepeatingSpell(int log_id)
 
 pair<int, int> getRepeatingSpell(int log_id)
 {
-	for (auto spell : g_spells)
+	for (auto spell : g_tomespells)
 	{
 		for (int i = 2; i < 10; i++)
 		{
-			if (log_id / i == spell.second.id)
+			if (log_id / i == spell.second.id && spell.second.repeat)
 				return {spell.second.id, i};
 		}
 	}
 	return {0, 0};
+}
+
+pair<int, int> getRepeatingSpellExclusive(int log_id)
+{
+	for (auto spell : g_spells)
+	{
+		for (int i = 2; i < 10; i++)
+		{
+			if (log_id / i == spell.second.id && spell.second.repeat)
+				return {spell.second.id, i};
+		}
+	}
+	return {0, 0};
+}
+
+bool isTome(int tome_id)
+{
+	for (auto &tome : g_tomes)
+	{
+		if (tome_id == tome.first)
+			return true;
+	}
+	return false;
 }
 
 ////////////////////////////////////// BRUTE FORCE SEARCHER //////////////////////////////////////
@@ -355,9 +393,9 @@ public:
 	map<int, bool> spells;
 	vector<int> log;
 	int depth;
-	int option_count;
 	vector<int> options;
-	map<int, int> repeats;
+	vector<int> tomes;
+	multimap<int, int> repeats;
 	bool rest_option = false;
 
 	/// class state
@@ -365,7 +403,6 @@ public:
 	static int limit;
 	static int nodes_searched;
 	static int target_hits;
-	static int limit_hits;
 
 	// root_node constructor
 	Node(Inventory start_inv, map<int, Spell> search_spells, map<int, vector<int>> search_targets)
@@ -375,7 +412,6 @@ public:
 		Node::limit = INITIAL_DEPTH_LIMIT;
 		Node::nodes_searched = 0;
 		Node::target_hits = 0;
-		Node::limit_hits = 0;
 
 		// initialize object state
 		inv = {start_inv.stones[0], start_inv.stones[1], start_inv.stones[2], start_inv.stones[3], start_inv.slots_filled};
@@ -383,26 +419,29 @@ public:
 			spells[spell.first] = spell.second.avail;
 		depth = 0;
 
-		// benchmarking search
-		// Benchmark bm;
-		// bm.startBenchmark();
 
 		// end of chain conditions
 		if (targetHit())
 			return;
 		if (limitHit())
 			return;
-		if (g_timer.endOfTurn())
-			return;
+		Timer::checkEndOfTurn();
 
 		// expansion mechanics
 		getOptions();
-		increaseDepth();
 
-		// benchmark results
-		// bm.endBenchmark();
-		// cerr << "Searched " << nodes_searched << " nodes in " << bm.getResult() << " ms and found ";
-		// cerr << target_hits << " target hits, " << limit_hits << " limit hits." << endl;
+		// tomes
+		if (g_spells.size() < MAX_SPELLS)
+		{
+			for (auto &tome : g_tomes)
+			{
+				if (inv[0] >= tome.second.tax_cost)
+					tomes.emplace_back(tome.first);
+			}
+		}
+
+		increaseRootDepth();
+
 		g_solutions_found += Node::target_hits;
 		g_nodes_searched += Node::nodes_searched;
 	}
@@ -410,17 +449,32 @@ public:
 	// placeholder Node
 	Node() {}
 
+	void increaseRootDepth()
+	{
+		for (auto spell : repeats)
+			g_nodes[Node::nodes_searched].createChildNode(mutatedInventory(spell.first, spell.second), mutatedSpells(spell.first), mutatedLog(spell.first * spell.second), depth + 1);
+		for (auto tome_id : tomes)
+			g_nodes[Node::nodes_searched].createChildNode(mutatedInventoryTome(tome_id), mutatedSpellsTome(tome_id), mutatedLog(tome_id), depth + 1);
+		for (auto spell_id : options)
+			g_nodes[Node::nodes_searched].createChildNode(mutatedInventory(spell_id), mutatedSpells(spell_id), mutatedLog(spell_id), depth + 1);
+		if (rest_option)
+		{
+			map<int, bool> mutated_spells = spells;
+			mutateSpellAvailability(mutated_spells);
+			g_nodes[Node::nodes_searched].createChildNode(inv, move(mutated_spells), mutatedLog(REST), depth + 1);
+		}
+	}
+
 	// clean up state of recycled Node
 	void cleanNode()
 	{
 		options.clear();
 		repeats.clear();
-		option_count = 0;
 		rest_option = false;
 	}
 
 	// fill recycled Node with appropiate info
-	void createChildNode(array<int, 5> mutated_inv, map<int, bool> mutated_spells, vector<int> mutated_log, int mutated_depth)
+	void createChildNode(array<int, 5> mutated_inv, map<int, bool> &&mutated_spells, vector<int> &&mutated_log, int mutated_depth)
 	{
 		cleanNode();
 
@@ -433,9 +487,8 @@ public:
 		// end of chain conditions
 		if (targetHit())
 			return;
+		Timer::checkEndOfTurn();
 		if (limitHit())
-			return;
-		if (g_timer.endOfTurn())
 			return;
 
 		// expansion mechanics
@@ -445,36 +498,15 @@ public:
 
 	void increaseDepth()
 	{
-		for (auto spell_id : options)
-		{
-			if (capacityHit())
-				return;
-			if (depth > 6)
-			{
-			 	if (!randomHit())
-					continue;
-			}
-			g_nodes[Node::nodes_searched].createChildNode(mutatedInventory(spell_id), mutatedSpells(spell_id), mutatedLog(spell_id), depth + 1);
-		}
-		for (auto spell : repeats)
-		{
-			if (capacityHit())
-				return;
-			if (depth > 6)
-			{
-			 	if (!randomHit())
-					continue;
-			}
+		for (auto &spell : repeats)
 			g_nodes[Node::nodes_searched].createChildNode(mutatedInventory(spell.first, spell.second), mutatedSpells(spell.first), mutatedLog(spell.first * spell.second), depth + 1);
-		}
-		if (capacityHit())
-			return;
+		for (auto &spell_id : options)
+			g_nodes[Node::nodes_searched].createChildNode(mutatedInventory(spell_id), mutatedSpells(spell_id), mutatedLog(spell_id), depth + 1);
 		if (rest_option)
 		{
 			map<int, bool> mutated_spells = spells;
 			mutateSpellAvailability(mutated_spells);
-
-			g_nodes[Node::nodes_searched].createChildNode(inv, mutated_spells, mutatedLog(NODE_REST), depth + 1);
+			g_nodes[Node::nodes_searched].createChildNode(inv, move(mutated_spells), mutatedLog(REST), depth + 1);
 		}
 	}
 
@@ -482,15 +514,13 @@ public:
 	{
 		for (auto &spell : spells)
 		{
-			if (g_timer.endOfTurn())
-				return;
-			if (g_spells[spell.first].haveRequiredStones(inv) && !g_spells[spell.first].willOverflowInventory(inv) && spell.second)
-				options.push_back(spell.first);
-			if (g_spells[spell.first].repeat && spell.second)
+			if (g_tomespells[spell.first].haveRequiredStones(inv) && !g_tomespells[spell.first].willOverflowInventory(inv) && spell.second)
+				options.emplace_back(spell.first);
+			if (g_tomespells[spell.first].repeat && spell.second)
 			{
 				for (int mult = 2; mult < 5; mult++)
 				{
-					if (g_spells[spell.first].haveRequiredStones(inv, mult) && !g_spells[spell.first].willOverflowInventory(inv, mult))
+					if (g_tomespells[spell.first].haveRequiredStones(inv, mult) && !g_tomespells[spell.first].willOverflowInventory(inv, mult))
 						repeats.insert({spell.first, mult});
 					else
 						break;
@@ -499,37 +529,12 @@ public:
 			if (!rest_option && !spell.second)
 				rest_option = true;
 		}
-		option_count = options.size() + repeats.size();
-		if (rest_option)
-			option_count++;
-	}
-
-	// turn based or game limits //
-	bool capacityHit()
-	{
-		if (Node::nodes_searched + 1 > NODE_COUNT)
-			return true;
-		if (Node::target_hits + 1 > LOG_COUNT)
-			return true;
-		if (g_timer.endOfTurn())
-			return true;
-		return false;
-	}
-
-	bool randomHit()
-	{
-		if (rand() % 3 == 0)
-			return true;
-		return false;
 	}
 
 	bool limitHit()
 	{
 		if (depth + 1 > Node::limit)
-		{
-			Node::limit_hits++;
 			return true;
-		}
 		return false;
 	}
 
@@ -563,6 +568,23 @@ public:
 		return true;
 	}
 
+	array<int, 5> mutatedInventoryTome(int tome_id)
+	{
+		array<int, 5> tmp = inv;
+		int tax_gain = g_tomes[tome_id].tax_gain;
+		int tax_cost = g_tomes[tome_id].tax_cost;
+
+		tmp[0] -= tax_cost;
+		tmp[4] -= tax_cost;
+
+		if (tmp[4] + tax_gain > 10)
+			tax_gain = 10 - tmp[4];
+
+		tmp[0] += tax_gain;
+		tmp[4] += tax_gain;
+		return tmp;
+	}
+
 	array<int, 5> mutatedInventory(int spell_id, int mult = 1)
 	{
 		array<int, 5> tmp = inv;
@@ -572,10 +594,17 @@ public:
 
 		for (int i = 0; i < 4; i++)
 		{
-			(g_spells[spell_id].stones[i] <= 0) ? tmp[i] -= mult * abs(g_spells[spell_id].stones[i]) : tmp[i] += mult * g_spells[spell_id].stones[i];
+			(g_tomespells[spell_id].stones[i] <= 0) ? tmp[i] -= mult * abs(g_tomespells[spell_id].stones[i]) : tmp[i] += mult * g_tomespells[spell_id].stones[i];
 			tmp[4] += tmp[i];
 		}
 
+		return tmp;
+	}
+
+	map<int, bool> mutatedSpellsTome(int tome_id)
+	{
+		map<int, bool> tmp = spells;
+		tmp.insert({tome_id, true});
 		return tmp;
 	}
 
@@ -605,7 +634,6 @@ map<int, vector<int>> Node::targets;
 int Node::limit;
 int Node::nodes_searched;
 int Node::target_hits;
-int Node::limit_hits;
 
 void initializeNodes()
 {
@@ -655,15 +683,20 @@ vector<int> getOptimalLog()
 
 		for (int y = 0; y < logs.size(); y++)
 		{
-			if (logs[y][i] == NODE_REST)
+			if (logs[y][i] == REST)
 				gains.emplace_back(0);
+			else if (isTome(logs[y][i]))
+				gains.emplace_back(4);
 			else if (isRepeatingSpell(logs[y][i]))
 			{
 				pair<int, int> instruction = getRepeatingSpell(logs[y][i]);
-				gains.emplace_back(g_spells[instruction.first].tier_based_nett * instruction.second);
+				if (instruction.first != 0)
+					gains.emplace_back(g_tomespells[instruction.first].tier_based_nett * instruction.second);
+				else
+					gains.emplace_back(0);
 			}
 			else
-				gains.emplace_back(g_spells[logs[y][i]].tier_based_nett);
+				gains.emplace_back(g_tomespells[logs[y][i]].tier_based_nett);
 		}
 
 		// finding highest tier based gain of current step
@@ -705,23 +738,14 @@ string getRecipeStep(vector<int> optimal_log)
 			if (recipe.second.id == optimal_log.front())
 				return "BREW " + to_string(optimal_log.front()) + " HERE'S YOUR SHIT, SIR";
 		}
-		for (auto &tome : g_tomes)
-		{
-			if (tome.second.id == optimal_log.front())
-				return "LEARN " + to_string(optimal_log.front());
-		}
-		///// NO SUPPORT FOR REPEATING SPELLS (!)
-		for (auto &spell : g_spells)
-		{
-			if (spell.second.id == optimal_log.front())
-				return "CAST " + to_string(optimal_log.front());
-		}
 	}
-	else if (optimal_log.front() == NODE_REST)
+	else if (optimal_log.front() == REST)
 		return "REST";
+	else if (isTome(optimal_log.front()))
+		return "LEARN " + to_string(optimal_log.front()) + " GIMME DAT!";
 	else if (isRepeatingSpell(optimal_log.front()))
 	{
-		pair<int, int> repeat = getRepeatingSpell(optimal_log.front());
+		pair<int, int> repeat = getRepeatingSpellExclusive(optimal_log.front());
 		return "CAST " + to_string(repeat.first) + " " + to_string(repeat.second);
 	}
 	return "CAST " + to_string(optimal_log.front());
@@ -743,12 +767,14 @@ string getStep(vector<vector<int>> optimal_logs)
 		int recipe_id = recipe.back();
 		recipes[recipe_id] = recipe;
 	}
+
 	for (auto recipe : optimal_logs)
 	{
 		int recipe_id = recipe.back();
-		ratings[recipe_id] = (float)g_recipes[recipe_id].price / recipe.size();
-		cerr << "Recipe " << recipe_id << " | " << g_recipes[recipe_id].price << " / " << recipe.size() << " = " << ratings[recipe_id] << "." << endl;
+		ratings[recipe_id] = pow(g_recipes[recipe_id].price, 2) / (recipe.size() + 1);
+		cerr << "Recipe " << recipe_id << " | " << ratings[recipe_id] << " | " << g_recipes[recipe_id].price << " gold | " << recipe.size() << " steps" << endl;
 	}
+	cerr << "=======================================" << endl;
 
 	float best_rating = -999;
 	int best_recipe = 0;
@@ -760,8 +786,8 @@ string getStep(vector<vector<int>> optimal_logs)
 			best_recipe = rating.first;
 		}
 	}
-	cerr << "__________________________________" << endl;
-	cerr << "Target " << best_recipe << " | " << g_recipes[best_recipe].price << " / " << recipes[best_recipe].size() << " = " << best_rating << "." << endl;
+	cerr << "Target recipe " << best_recipe << " | " << best_rating << " | " << g_recipes[best_recipe].price << " gold | " << recipes[best_recipe].size() << " steps" << endl;
+	cerr << "=======================================" << endl;
 	return getRecipeStep(recipes[best_recipe]);
 }
 
@@ -784,33 +810,46 @@ void searchRecipes()
 	vector<int> recipes_searched;
 	vector<int> optimal_log;
 
-	while (!g_timer.endOfTurn())
-	{
-		search_targets.clear();
-		g_logs.clear();
+	setTomeSpells();
 
-		for (auto recipe : g_recipes)
+	try
+	{
+		while (true)
 		{
-			bool already_searched = false;
-			for (auto searched : recipes_searched)
+			search_targets.clear();
+			g_logs.clear();
+
+			for (auto recipe : g_recipes)
 			{
-				if (recipe.first == searched)
+				bool already_searched = false;
+				for (auto searched : recipes_searched)
 				{
-					already_searched = true;
-					break;
+					if (recipe.first == searched)
+					{
+						already_searched = true;
+						break;
+					}
 				}
+				if (!already_searched)
+					search_targets[recipe.first] = recipe.second.getCost();
 			}
-			if (!already_searched)
-				search_targets[recipe.first] = recipe.second.getCost();
+			if (search_targets.empty())
+				break;
+			Node root_node(g_inv, g_spells, search_targets);
+			optimal_log = getOptimalLog();
+			if (optimal_log.empty())
+				break;
+			optimal_logs.emplace_back(optimal_log);
+			recipes_searched.emplace_back(optimal_logs.back().back());
 		}
-		if (search_targets.empty())
-			break;
-		Node root_node(g_inv, g_spells, search_targets);
+	}
+	catch(const char *e)
+	{
+		g_solutions_found += Node::target_hits;
+		g_nodes_searched += Node::nodes_searched;
 		optimal_log = getOptimalLog();
-		if (optimal_log.empty())
-			break;
-		optimal_logs.emplace_back(optimal_log);
-		recipes_searched.emplace_back(optimal_logs.back().back());
+		if (!optimal_log.empty())
+			optimal_logs.emplace_back(optimal_log);
 	}
 	g_step = getStep(optimal_logs);
 }
@@ -831,13 +870,13 @@ bool hasFreeloader()
 {
 	for (auto tome : g_tomes)
 	{
-		if (tome.second.freeloader && tome.second.tax_cost < 2)
+		if (tome.second.freeloader)
 			return true;
 	}
 	return false;
 }
 
-int getOptimalFreeloader()
+int getFreeloader()
 {
 	int max_gain = -999;
 	vector<int> tmp_tomes;
@@ -845,7 +884,7 @@ int getOptimalFreeloader()
 
 	for (auto tome : g_tomes)
 	{
-		if (tome.second.freeloader && tome.second.tax_cost < 2)
+		if (tome.second.freeloader)
 			tmp_tomes.push_back(tome.first);
 	}
 	for (auto i : tmp_tomes)
@@ -864,23 +903,23 @@ int getOptimalFreeloader()
 	return ret;
 }
 
-////////////////////////////////////// HIGH LEVEL CONTROL FLOW ///////////////////////////////////
+////////////////////////////////////// CONTROL FLOW ///////////////////////////////////
 
 void decideAction()
 {
-	g_timer = Timer();
-
-	if (g_spells.size() <= MAX_SPELLS && hasFreeloader())
+	if (g_spells.size() < MIN_SPELLS)
 	{
-		int tome_id = getOptimalFreeloader();
-		if (g_tomes[tome_id].haveRequiredStones(g_inv))
+		if (hasFreeloader())
 		{
-			cout << "LEARN " << tome_id << endl;
-			return;
+			int tome_id = getFreeloader();
+			if (g_tomes[tome_id].haveRequiredStones(g_inv))
+				cout << "LEARN " << tome_id << endl;
+			else
+				cout << "LEARN " << getFreeTome() << endl;
 		}
+		else
+			cout << "LEARN " << getFreeTome() << endl;
 	}
-	if (g_spells.size() < MAX_SPELLS)
-		cout << "LEARN " << getFreeTome() << endl;
 	else
 	{
 		searchRecipes();
@@ -888,220 +927,29 @@ void decideAction()
 	}
 }
 
+
+void turnSummary(int &turn)
+{
+	cerr << "Turn " << turn << " | " << Timer::getTime() << " ms | " << g_nodes_searched << " nodes | " << g_solutions_found << " solutions " << endl;
+	turn++;
+}
+
 int main()
 {
+	int turn = 1;
+
 	initializeNodes();
 	initializeLogs();
 
-	srand(time(0));
-
-	Benchmark turn;
-	int turns = 1;
-
 	while (true)
 	{
-		// cleaning data
-
-		g_solutions_found = 0;
 		g_nodes_searched = 0;
-		
-
-		// /// benchmarking ///
-		// testInput();
-		// //benchmarkCycles(50);
-		// benchmarkAllRecipes();
-
-		/// debugging ///
-		//printData();
-
-		/// live input ///
+		g_solutions_found = 0;
 		processInput();
-		
-		turn.startBenchmark();
+		Timer::setTimer();
 		decideAction();
-		turn.endBenchmark();
-
-		cerr << turn.getResult() << " ms | " << g_nodes_searched << " nodes | " << g_solutions_found << " solutions " << endl;
-		//return 0; /// debugging / benchmarking
+		turnSummary(turn);
 	}
-}
-
-//////////////////////////////////////////////// BENCHMARK /////////////////////////////////////////
-
-void benchmarkAllRecipes()
-{
-	map<int, vector<int>> search_targets;
-	vector<vector<int>> optimal_logs;
-	vector<int> recipes_searched;
-	vector<int> optimal_log;
-
-	Benchmark bm;
-	bm.startBenchmark();
-
-	while (!g_timer.endOfTurn())
-	{
-		search_targets.clear();
-		g_logs.clear();
-
-		for (auto recipe : g_recipes)
-		{
-			bool already_searched = false;
-			for (auto searched : recipes_searched)
-			{
-				if (recipe.first == searched)
-				{
-					already_searched = true;
-					break;
-				}
-			}
-			if (!already_searched)
-				search_targets[recipe.first] = recipe.second.getCost();
-		}
-		if (search_targets.empty())
-			break;
-		Node root_node(g_inv, g_spells, search_targets);
-		optimal_log = getOptimalLog();
-		if (optimal_log.empty())
-			break;
-		optimal_logs.emplace_back(optimal_log);
-		recipes_searched.emplace_back(optimal_log.back());
-	}
-	bm.endBenchmark();
-	cout << "Search time: " << bm.getResult() << endl;
-	getStep(optimal_logs);
-}
-
-void benchmarkCycles(int cycles)
-{
-	map<int, vector<int>> search_targets;
-	for (auto recipe : g_recipes)
-		search_targets[recipe.first] = recipe.second.getCost();
-
-	Benchmark bm;
-	bm.startBenchmark();
-
-	for (int i = 0; i < cycles; i++)
-	{
-		Node root_node(g_inv, g_spells, search_targets);
-	}
-	bm.endBenchmark();
-	cout << "Search time (mean): " << bm.getResult() / cycles << endl;
-}
-
-//////////////////////////////////////////////// DEBUG /////////////////////////////////////////
-
-void printOptimalLog(vector<int> result)
-{
-	if (result.empty())
-	{
-		cerr << "No results." << endl;
-		return;
-	}
-	if (result.size() == 1)
-	{
-		cerr << "All ingredients for action " << result.back() << " are available." << endl;
-		return;
-	}
-	cerr << "Action " << result.back() << " in " << result.size() - 1 << " step(s): ";
-	for (auto step : result)
-	{
-		if (step == result.back())
-			continue;
-		if (step != NODE_REST)
-			cerr << step;
-		else
-			cerr << "REST";
-		cerr << ", ";
-	}
-	cerr << endl;
-}
-
-void printLogs(vector<vector<int>> results)
-{
-	for (auto log : results)
-	{
-		cerr << "Action " << log.back() << " in " << log.size() - 1 << " step(s): ";
-		for (auto step : log)
-		{
-			if (step == log.back())
-				continue;
-			if (step != NODE_REST)
-				cerr << step;
-			else
-				cerr << "REST";
-			cerr << ", ";
-		}
-		cerr << endl;
-	}
-}
-
-void printSpells()
-{
-	cerr << "-------------SPELLS-------------" << endl;
-	for (auto spell : g_spells)
-	{
-		cerr << "spell " << spell.first << " [";
-		for (int i = 0; i < 4; i++)
-		{
-			cerr << spell.second.stones[i];
-			(i == 3) ? cerr << "]" << endl : cerr << ", ";
-		}
-	}
-}
-
-void printTomes()
-{
-	cerr << "-------------TOMES-------------" << endl;
-	for (auto tome : g_tomes)
-	{
-		cerr << "tome " << tome.first << " [";
-		for (int i = 0; i < 4; i++)
-		{
-			cerr << tome.second.stones[i];
-			(i == 3) ? cerr << "]" : cerr << ", ";
-		}
-		if (tome.second.freeloader)
-			cerr << " - freeloader";
-		cerr << endl;
-	}
-}
-
-void printRecipes()
-{
-	cerr << "-------------RECIPES-------------" << endl;
-	for (auto recipe : g_recipes)
-	{
-		cerr << "recipe " << recipe.first << " [";
-		for (int i = 0; i < 4; i++)
-		{
-			cerr << recipe.second.stones[i];
-			(i == 3) ? cerr << "]" : cerr << ", ";
-		}
-		cerr << " - rating " << recipe.second.rating << " - steps " << recipe.second.steps << " - " << recipe.second.price << " rupees" << endl;
-	}
-}
-
-void printData()
-{
-	printRecipes();
-	//printTomes();
-	printSpells();
-}
-
-/////////////////////////////////// TEST INPUT ///////////////////////////////////
-
-void testInput()
-{
-	g_recipes.insert({60, Recipe(0, 0, -5, 0, 60, 16)});
-	g_recipes.insert({62, Recipe(0, -2, 0, -3, 62, 19)});
-	g_recipes.insert({72, Recipe(0, -2, -2, -2, 72, 19)});
-	g_recipes.insert({74, Recipe(-3, -1, -1, -1, 74, 14)});
-	g_recipes.insert({75, Recipe(-1, -3, -1, -1, 75, 16)});
-
-	g_spells.insert({78, Spell(2, 0, 0, 0, 78, true, false)});
-	g_spells.insert({79, Spell(-1, 1, 0, 0, 79, true, false)});
-	g_spells.insert({80, Spell(0, -1, 1, 0, 80, true, false)});
-	g_spells.insert({81, Spell(0, 0, -1, 1, 81, true, false)});
 }
 
 /////////////////////////////////// INPUT & INITIALIZATIONS ///////////////////////////////////
@@ -1153,8 +1001,6 @@ void processInventory()
 
 		if (i == 0)
 			g_inv = Inventory(blue, green, orange, yellow, score);
-		if (i == 1)
-			enemy_score = score;
 	}
 }
 

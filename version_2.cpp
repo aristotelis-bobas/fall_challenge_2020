@@ -3,6 +3,7 @@
 #include <map>
 #include <vector>
 #include <cmath>
+#include <chrono>
 
 #define CREATION_SIMULATION_DEPTH 4
 #define PRICE_WEIGHT 2
@@ -15,8 +16,29 @@
 // #define SIM_RESULTS 
 
 using namespace std;
+using namespace std::chrono;
 
 ////////////////////////////////////// CLASSES ///////////////////////////////////
+
+class Benchmark
+{
+public:
+	Benchmark() {}
+
+	void startBenchmark() { start = high_resolution_clock::now(); }
+	void endBenchmark()
+	{
+		end = high_resolution_clock::now();
+		time_span = duration<double, std::milli>(end - start);
+	}
+	auto getResult() { return time_span.count(); }
+	void printResult() { cerr << "benchmark took " << time_span.count() << " ms" << endl; }
+
+private:
+	high_resolution_clock::time_point start;
+	high_resolution_clock::time_point end;
+	duration<double, milli> time_span;
+};
 
 struct Stones
 {
@@ -1770,9 +1792,15 @@ void initializeCreationRates()
 int main()
 {
 	initializeCreationRates();
+	Benchmark input;
+	
 	while (true)
 	{
+		input.startBenchmark();
 		processInput();
+				input.endBenchmark();
+		cerr << "Processing input took " << input.getResult() << " ms." << endl;
+
 		printData();
 		computeOutput();
 		turn++;
