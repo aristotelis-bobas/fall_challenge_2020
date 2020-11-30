@@ -6,6 +6,6 @@ My bot's source code for CodinGame's [Fall Challenge 2020](https://www.codingame
 <p>
 This was the first time I joined a CodinGame competition. <br>
 It was a challenging and fun introduction to writing an AI that competes with others in a turn-based game. <br>
-I wrote a brute force tree search algorithm that automatically limits its depth based on solutions found. <br>
+I wrote a brute force tree search algorithm that autonomously adjusts its max. search depth based on which depth it hit a target. <br>
 It was able to search about 45K game states within the turn's time limits. <br>
 With this approach I managed to finish at position #421 in the Gold League. </p>
