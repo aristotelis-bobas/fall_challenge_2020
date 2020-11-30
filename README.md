@@ -8,4 +8,5 @@ This was the first time I joined a CodinGame competition. <br>
 It was a challenging and fun introduction to writing an AI that competes with others in a turn-based game. <br>
 I wrote a brute force tree search algorithm that autonomously adjusts its max. search depth based on which depth it hit a target. <br>
 It was able to search about 45K game states within the turn's time limits. <br>
+At the end of the turn it compared all shortest combinations of moves that would lead to having sufficient ingredients to brew a potion, and choose the most optimal one. <br>
 With this approach I managed to finish at position #421 in the Gold League. </p>
